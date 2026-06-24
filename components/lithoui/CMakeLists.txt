@@ -6,7 +6,7 @@ add_library(litho STATIC
 
     # --- framework ---
     framework/view/view.cpp
-    framework/activity/activity_stub.cpp
+    framework/activity/activity.cpp
     framework/intent/bundle.cpp
 )
 
