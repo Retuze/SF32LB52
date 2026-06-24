@@ -1,0 +1,2 @@
+name=hello_litho
+version=1

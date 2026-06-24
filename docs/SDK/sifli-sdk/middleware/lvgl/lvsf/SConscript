@@ -1,0 +1,37 @@
+from building import *
+import os
+import rtconfig
+
+# get current dir path
+cwd = GetCurrentDir()
+
+# init src and inc vars
+src = []
+inc = []
+group = []
+
+# add LittlevGL Sifli watch component common include
+inc = inc + [cwd]
+inc = inc + [cwd + '/..']
+
+gui_widgets_dir = os.path.join(cwd, 'gui_widgets')
+if os.path.isdir(gui_widgets_dir):
+    inc = inc + [gui_widgets_dir]
+
+# add LittlevGL Sifli watch component code
+src = src + Glob('./*.c')
+if not (GetDepend('PKG_USING_UI_BINARY_LOADER') or GetDepend('PKG_USING_UI_XML_LOADER')):
+    SrcRemove(src, 'lv_layout_loader.c')
+
+if not GetDepend('LV_USING_FREETYPE_ENGINE'):
+    SrcRemove(src, 'lv_freetype.c')
+
+LOCAL_CCFLAGS = ''
+
+group.extend(DefineGroup('LV_SF', src, depend=['PKG_USING_LITTLEVGL2RTT'], CPPPATH=inc, LOCAL_CCFLAGS=LOCAL_CCFLAGS))
+
+gui_widgets_sconscript = os.path.join(gui_widgets_dir, 'SConscript')
+if os.path.isfile(gui_widgets_sconscript):
+    group.extend(SConscript(gui_widgets_sconscript, variant_dir='gui_widgets', duplicate=0))
+
+Return('group')

@@ -1,0 +1,11 @@
+.cache
+.vscode
+*.tar
+build/
+compile_commands.json
+.DS_Store
+Thumbs.db
+*.o
+*.obj
+*.bin
+components/lithoui/generated/res_images.bin

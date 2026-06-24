@@ -1,0 +1,21 @@
+# SDK configuration for Watch V1.0
+# Selected by setting PLATFORM=watch_v1_0 in project.cmake or CMake cache.
+
+# --- Clock ---
+CONFIG_SYSCLK_HZ=240000000
+
+# --- Logging ---
+CONFIG_LOG_DEFAULT_LEVEL=2
+
+# --- BLE ---
+# CONFIG_BLE_ENABLED=y
+
+# --- LVGL ---
+# CONFIG_LVGL_ENABLED=y
+# CONFIG_LVGL_COLOR_DEPTH=32
+# CONFIG_LVGL_HOR_RES=466
+# CONFIG_LVGL_VER_RES=466
+
+# --- Sensors ---
+# CONFIG_HRM_ENABLED=y
+# CONFIG_ACCEL_ENABLED=y
