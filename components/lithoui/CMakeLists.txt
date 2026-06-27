@@ -10,6 +10,14 @@ add_library(litho STATIC
     framework/intent/bundle.cpp
 )
 
+# res_embed.S pulls in res_images.bin via `.incbin`. Assembler .incbin
+# dependencies are NOT auto-tracked by CMake/Ninja, so a regenerated bundle
+# would NOT trigger a rebuild — the firmware would keep the stale image data
+# that was current when res_embed.S was last compiled (mismatching res_images.h).
+# Declare the dependency explicitly so the bundle is always re-embedded.
+set_source_files_properties(generated/res_embed.S PROPERTIES
+    OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/res_images.bin")
+
 target_include_directories(litho PUBLIC
     ${CMAKE_SOURCE_DIR}/components/lithoui
     ${CMAKE_SOURCE_DIR}/components/lithoui/port/sf32lb52

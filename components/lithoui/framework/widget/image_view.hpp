@@ -6,12 +6,27 @@ namespace litho {
 
 class ImageView : public View {
 public:
-    ImageView(int w, int h) : mWidth(w), mHeight(h) {}
+    // Size follows the image by default. Use the (w,h) ctor only to force a
+    // fixed size (scaling/cropping); setImageId() then leaves it untouched.
+    ImageView() = default;
+    explicit ImageView(ImageId id) { setImageId(id); }
+    ImageView(int w, int h) : mWidth(w), mHeight(h), mExplicitSize(true) {
+        mBounds.width  = (int16_t)w;
+        mBounds.height = (int16_t)h;
+    }
 
     // ---- image source ----
 
     void setImageId(ImageId id) {
         mImageId = id;
+        // Adopt the image's native size unless a fixed size was requested.
+        if (!mExplicitSize && id < IMG_COUNT) {
+            const ImageEntry* e = imageEntry(id);
+            mWidth         = e->width;
+            mHeight        = e->height;
+            mBounds.width  = (int16_t)e->width;
+            mBounds.height = (int16_t)e->height;
+        }
         invalidate();
     }
     ImageId imageId() const { return mImageId; }
@@ -116,18 +131,24 @@ public:
 
     void onDraw(Painter& p) override {
         if (mImageId < IMG_COUNT) {
-            const ImageEntry* e     = imageEntry(mImageId);
-            const void*       src   = (const void*)imagePixels(mImageId);
-            const uint8_t*    alpha = imageAlpha(mImageId);
-            const RGB565*     tint  = mHasTint ? &mTint : nullptr;
+            const ImageEntry* e    = imageEntry(mImageId);
+            const void*       src  = (const void*)imagePixels(mImageId);
+            const RGB565*     tint = mHasTint ? &mTint : nullptr;
+            // Draw by the image's real format:
+            //   FMT_RGB565 (0)     opaque  → word-copy fast path
+            //   FMT_RGB565_A8 (1)  RGB + A8 alpha plane → needs mask
+            //   FMT_A8 (2)         alpha only, filled with tint
+            //   FMT_RGB565_RLE (3) RLE-decoded opaque path
+            const int      fmt  = e->format;
+            const uint8_t* mask = (fmt == FMT_RGB565_A8) ? imageAlpha(mImageId)
+                                                         : nullptr;
 
             if (mHasAngle) {
-                p.drawImageRotatedDeci(src, e->format, e->width, e->height,
+                p.drawImageRotatedDeci(src, fmt, e->width, e->height,
                                    0, 0, mPivotX, mPivotY, mAngleDeci,
-                                   alpha, tint);
+                                   mask, tint);
             } else {
-                p.drawImage(src, e->format, e->width, e->height, 0, 0,
-                            alpha, tint);
+                p.drawImage(src, fmt, e->width, e->height, 0, 0, mask, tint);
             }
         } else {
             p.fillRect(0, 0, mWidth, mHeight, RGB565::fromRGB(64, 160, 64));
@@ -137,6 +158,7 @@ public:
 private:
     int       mWidth    = 0;
     int       mHeight   = 0;
+    bool      mExplicitSize = false;  // true = fixed size, ignore image size
     ImageId   mImageId  = IMG_COUNT;
     RGB565    mTint     = {0};
     bool      mHasTint  = false;

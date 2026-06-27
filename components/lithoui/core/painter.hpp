@@ -2,8 +2,18 @@
 #include "tile.hpp"
 #include "litho_core.h"
 #include "res_images.h"
-#include <string.h>
 #include <stdio.h>
+#include <string.h>
+#ifndef DWT_CYCCNT
+#define DWT_CYCCNT (*(volatile uint32_t*)0xE0001004UL)
+#endif
+
+// A/B test: 1 = disable RLE row offset table (sequentially scan to the start
+// row), 0 = O(1) table seek. Default 0; flip to 1 to measure the table's value.
+// Measured draw — value scales with skip-rows × cmd-bytes/row:
+//   12×100px icons (RLE 14%, ~49 B/row):  5762 vs  6245 µs  (+8.4%)
+//   360×360 avatar (RLE 51%, 366 B/row): 10748 vs 37828 µs  (+252%, O(n²) skip)
+#define LITHO_RLE_NO_OFFSET_TABLE 0
 
 namespace litho {
 
@@ -44,8 +54,12 @@ public:
         if (bottom < mClipB) mClipB = bottom;
     }
 
+    void setTileIdx(uint8_t ti) { mTileIdx = ti; }
+    uint8_t tileIdx() const     { return mTileIdx; }
+
+    __attribute__((noinline, section(".ramfunc")))
     void fillRect(int x, int y, int w, int h, RGB565 c) {
-        if (!mTile || !mTile->buffer()) return;  // guard: null tile
+        if (!mTile || !mTile->buffer()) return;
         int sx0 = x + mScreenX;
         int sy0 = y + mScreenY;
         int sx1 = sx0 + w;
@@ -70,10 +84,14 @@ public:
         uint16_t* row = mTile->buffer() + ty0 * mTile->stride();
 
         if (mAlpha == 255) {
+            // 32-bit word fill (2 pixels per store) — same speed as benchmark ram S→S
+            uint32_t c32 = ((uint32_t)c.value << 16) | c.value;
+            int count = tx1 - tx0;
             for (int ty = ty0; ty < ty1; ty++) {
-                for (int tx = tx0; tx < tx1; tx++) {
-                    row[tx] = c.value;
-                }
+                uint32_t* row32 = (uint32_t*)(row + tx0);
+                int wc = count / 2;
+                for (int i = 0; i < wc; i++) row32[i] = c32;
+                if (count & 1) row[tx0 + wc * 2] = c.value;
                 row += mTile->stride();
             }
         } else {
@@ -98,6 +116,7 @@ public:
 
     // ── drawImage (straight copy, no rotation) ────────────────────
 
+    __attribute__((noinline, section(".ramfunc")))
     void drawImage(const void* src, int fmt,
                    int srcW, int srcH, int dx, int dy,
                    const uint8_t* mask = nullptr,
@@ -128,14 +147,89 @@ public:
         int srcOffX = sx0 - (dx + mScreenX);
         int srcOffY = sy0 - (dy + mScreenY);
 
-        // Fast path: opaque RGB565, no tint, no mask
+        // Fast path: opaque RGB565, no alpha/tint/mask.
+        // 8x unrolled word copy Flash→tile (.ramfunc → SRAM so fetch
+        // never fights data on QSPI).  One cache line (32 B) per iteration.
         if (!tint && fmt == 0 && mAlpha == 255 && !mask) {
-            uint16_t* dstBuf = mTile->buffer();
-            const uint16_t* src16 = (const uint16_t*)src;
+            uint16_t* tile    = mTile->buffer();
+            int       tStride = mTile->stride();
             for (int y = 0; y < copyH; y++) {
-                uint16_t* dstRow = dstBuf + (ty0 + y) * mTile->stride() + tx0;
-                const uint16_t* srcRow = src16 + (srcOffY + y) * srcW + srcOffX;
-                memcpy(dstRow, srcRow, copyW * sizeof(uint16_t));
+                const uint32_t* sp = (const uint32_t*)((const uint16_t*)src + (srcOffY + y) * srcW + srcOffX);
+                uint32_t*       dp = (uint32_t*)(tile + (ty0 + y) * tStride + tx0);
+                uint32_t w = (uint32_t)copyW / 2;
+                uint32_t i = 0;
+                for (; i + 8 <= w; i += 8) {
+                    dp[i+0]=sp[i+0]; dp[i+1]=sp[i+1]; dp[i+2]=sp[i+2]; dp[i+3]=sp[i+3];
+                    dp[i+4]=sp[i+4]; dp[i+5]=sp[i+5]; dp[i+6]=sp[i+6]; dp[i+7]=sp[i+7];
+                }
+                for (; i < w; i++) dp[i] = sp[i];
+                if (copyW & 1) ((uint16_t*)dp)[copyW-1] = ((const uint16_t*)sp)[copyW-1];
+            }
+            return;
+        }
+
+        // RLE decompress path — fmt=3 (FMT_RGB565_RLE), opaque only
+        // Format: [uint32_t off[h]][compressed rows], each row self-delimiting
+        if (fmt == 3 && mAlpha == 255 && !tint && !mask) {
+            const uint8_t* rle = (const uint8_t*)src;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint16_t* tile = mTile->buffer();
+            int tStride = mTile->stride();
+
+            // Jump to starting row: O(1) table seek, or (A/B test) simulate
+            // having no table by sequentially scanning every preceding row.
+#if LITHO_RLE_NO_OFFSET_TABLE
+            (void)off;
+            const uint8_t* p = rle + srcH * 4;   // data starts past the table
+            for (int skip = 0; skip < srcOffY; skip++) {
+                int spx = 0;
+                while (spx < srcW) {
+                    uint8_t cmd = *p++;
+                    int n = (cmd & 0x7F) + 1;
+                    p += (cmd & 0x80) ? n * 2 : 2;
+                    spx += n;
+                }
+            }
+#else
+            const uint8_t* p = rle + off[srcOffY];
+#endif
+            // Clip the visible source x-span once: [visL, visR) maps to dst
+            // [0, copyW). Each run/literal is intersected with it ONCE (not
+            // per-pixel); runs word-fill, literals memcpy.
+            const int visL = srcOffX;
+            const int visR = srcOffX + copyW;
+            for (int y = 0; y < copyH; y++) {
+                uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
+                int px = 0;
+                while (px < srcW) {
+                    uint8_t cmd = *p++;
+                    int n = (cmd & 0x7F) + 1;
+                    int runR = px + n;
+                    int cl = px   < visL ? visL : px;     // run ∩ visible span
+                    int cr = runR > visR ? visR : runR;
+                    if (cmd & 0x80) {
+                        // literal: n distinct pixels at p
+                        if (cr > cl)
+                            memcpy(dstRow + (cl - visL),
+                                   (const uint16_t*)p + (cl - px),
+                                   (size_t)(cr - cl) * 2);
+                        p += n * 2;
+                    } else {
+                        // run: one color ×n → 32-bit word fill
+                        uint16_t c = *(const uint16_t*)p; p += 2;
+                        if (cr > cl) {
+                            uint16_t* dp = dstRow + (cl - visL);
+                            int cnt = cr - cl;
+                            if (cnt && ((uintptr_t)dp & 3)) { *dp++ = c; --cnt; }
+                            uint32_t c32 = ((uint32_t)c << 16) | c;
+                            uint32_t* d4 = (uint32_t*)dp;
+                            int wc = cnt >> 1;
+                            for (int i = 0; i < wc; i++) d4[i] = c32;
+                            if (cnt & 1) dp[cnt - 1] = c;
+                        }
+                    }
+                    px = runR;
+                }
             }
             return;
         }
@@ -585,7 +679,7 @@ public:
             for (int y = 0; y < copyH; y++) {
                 uint16_t*       dstRow = mTile->buffer() + (ty0 + y) * mTile->stride() + tx0;
                 const uint16_t* srcRow = src.buffer() + (srcOffY + y) * src.stride() + srcOffX;
-                memcpy(dstRow, srcRow, copyW * sizeof(uint16_t));
+                for (int x = 0; x < copyW; x++) dstRow[x] = srcRow[x];
             }
         } else {
             uint32_t a  = mAlpha;
@@ -616,6 +710,7 @@ private:
     int     mClipR    = 32767;
     int     mClipB    = 32767;
     uint8_t mAlpha    = 255;
+    uint8_t mTileIdx  = 0;
 };
 
 } // namespace litho

@@ -6,42 +6,57 @@
 #define RES_BUNDLE_VERSION 0x00000001
 
 typedef enum ImageId {
-    IMG_A_ALARM = 0,
-    IMG_A_CALCULATOR = 1,
-    IMG_A_CALENDAR = 2,
-    IMG_A_CALL_RECORDS = 3,
-    IMG_A_CAMERA = 4,
-    IMG_A_COMPASS = 5,
-    IMG_A_CONTACT_PERSON = 6,
-    IMG_A_DIAL = 7,
-    IMG_A_FIND_PHONE = 8,
-    IMG_A_GAME = 9,
-    IMG_A_MAP_NAVIGATION = 10,
-    IMG_A_MESSAGES = 11,
-    IMG_A_MUSIC = 12,
-    IMG_A_SETTINGS = 13,
-    IMG_A_SHUTDWON = 14,
-    IMG_A_SLEEP = 15,
-    IMG_A_SOS = 16,
-    IMG_A_SPORTS = 17,
-    IMG_A_STOPWATCH = 18,
-    IMG_A_STRESS = 19,
-    IMG_A_TEST = 20,
-    IMG_A_TIMER = 21,
-    IMG_A_VIDEO_CONTROL = 22,
-    IMG_A_VOICE_ASSISTANT = 23,
-    IMG_A_WEATHER = 24,
-    IMG_G_MUSIC = 25,
-    IMG_R_MIN = 26,
-    IMG_R_SEC = 27,
-    IMG_R_TEST = 28,
-    IMG_COUNT = 29
+    IMG_03 = 0,
+    IMG_ALARM = 1,
+    IMG_CALENDAR = 2,
+    IMG_CAMERA = 3,
+    IMG_COMPASS = 4,
+    IMG_DIAL = 5,
+    IMG_MESSAGES = 6,
+    IMG_MUSIC = 7,
+    IMG_SETTINGS = 8,
+    IMG_SLEEP = 9,
+    IMG_SPORTS = 10,
+    IMG_STOPWATCH = 11,
+    IMG_WEATHER = 12,
+    IMG_A_03 = 13,
+    IMG_A_ALARM = 14,
+    IMG_A_CALCULATOR = 15,
+    IMG_A_CALENDAR = 16,
+    IMG_A_CALL_RECORDS = 17,
+    IMG_A_CAMERA = 18,
+    IMG_A_COMPASS = 19,
+    IMG_A_CONTACT_PERSON = 20,
+    IMG_A_DIAL = 21,
+    IMG_A_FIND_PHONE = 22,
+    IMG_A_GAME = 23,
+    IMG_A_MAP_NAVIGATION = 24,
+    IMG_A_MESSAGES = 25,
+    IMG_A_MUSIC = 26,
+    IMG_A_SETTINGS = 27,
+    IMG_A_SHUTDWON = 28,
+    IMG_A_SLEEP = 29,
+    IMG_A_SOS = 30,
+    IMG_A_SPORTS = 31,
+    IMG_A_STOPWATCH = 32,
+    IMG_A_STRESS = 33,
+    IMG_A_TEST = 34,
+    IMG_A_TIMER = 35,
+    IMG_A_VIDEO_CONTROL = 36,
+    IMG_A_VOICE_ASSISTANT = 37,
+    IMG_A_WEATHER = 38,
+    IMG_G_MUSIC = 39,
+    IMG_R_MIN = 40,
+    IMG_R_SEC = 41,
+    IMG_R_TEST = 42,
+    IMG_COUNT = 43
 } ImageId;
 
 enum ImageFormat {
-    FMT_RGB565    = 0,  // opaque RGB565
-    FMT_RGB565_A8 = 1,  // RGB + alpha mask
-    FMT_A8        = 2,  // single-channel alpha (default black, tintable)
+    FMT_RGB565     = 0,  // opaque RGB565
+    FMT_RGB565_A8  = 1,  // RGB + alpha mask
+    FMT_A8         = 2,  // single-channel alpha (default black, tintable)
+    FMT_RGB565_RLE = 3,  // RLE compressed RGB565 (byte stream, not pixel array)
 };
 
 #pragma pack(push, 1)
@@ -81,11 +96,12 @@ static inline const ImageBundleHeader* resHeader() {
 static inline const ImageEntry* imageEntry(ImageId id) {
     return &((const ImageEntry*)(RES_IMAGE_BUNDLE + 16))[id];
 }
-static inline const uint16_t* imagePixels(ImageId id) {
-    return (const uint16_t*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
+static inline const void* imagePixels(ImageId id) {
+    return (const void*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
 }
 static inline const uint8_t* imageAlpha(ImageId id) {
     const ImageEntry* e = imageEntry(id);
+    if (e->format == FMT_RGB565_RLE) return 0;
     if (e->format != FMT_RGB565_A8) return 0;
     return (const uint8_t*)(RES_IMAGE_BUNDLE + e->offset
                            + (uint32_t)e->width * e->height * 2);

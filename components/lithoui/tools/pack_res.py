@@ -38,9 +38,10 @@ VERSION     = 0x00010000
 ENTRY_SIZE  = 16
 HEADER_SIZE = 16
 
-FMT_RGB565    = 0
-FMT_RGB565_A8 = 1   # RGBA with alpha mask
-FMT_A8        = 2   # single-channel alpha (tintable, default black)
+FMT_RGB565     = 0
+FMT_RGB565_A8  = 1   # RGBA with alpha mask
+FMT_A8         = 2   # single-channel alpha (tintable, default black)
+FMT_RGB565_RLE = 3   # RLE compressed RGB565
 
 FLAG_HAS_SIN  = 0x0001
 
@@ -82,6 +83,43 @@ def pack_rgb565(path):
     data = img.getdata()
     pixels = [rgba_to_rgb565(r, g, b) for r, g, b, _ in data]
     return w, h, pixels
+
+
+def rle_encode_rgb565(pixels, w, h):
+    """RLE compress RGB565 pixels with row offset table. Returns bytes or None."""
+    off_size = h * 4
+    out = bytearray(off_size)  # placeholder for offset table
+    for y in range(h):
+        row_off = len(out)
+        # Fill offset for this row (absolute position in buffer)
+        struct.pack_into('<I', out, y * 4, row_off)
+        row = pixels[y * w:(y + 1) * w]
+        x = 0
+        while x < w:
+            c = row[x]
+            # Count repeat run
+            run = 1
+            while x + run < w and run < 128 and row[x + run] == c:
+                run += 1
+            if run >= 2:
+                out.append(run - 1)          # repeat count-1
+                out.append(c & 0xFF)
+                out.append((c >> 8) & 0xFF)
+                x += run
+            else:
+                # Literal run
+                lit = 1
+                while x + lit < w and lit < 128:
+                    if x + lit + 1 < w and row[x + lit + 1] == row[x + lit]:
+                        break  # next pixel starts a repeat
+                    lit += 1
+                out.append(0x80 | (lit - 1))  # literal, count-1
+                for k in range(lit):
+                    pc = row[x + k]
+                    out.append(pc & 0xFF)
+                    out.append((pc >> 8) & 0xFF)
+                x += lit
+    return bytes(out) if len(out) < w * h * 2 else None
 
 
 def pack_grayscale(path):
@@ -157,9 +195,10 @@ typedef enum ImageId {{
 }} ImageId;
 
 enum ImageFormat {{
-    FMT_RGB565    = 0,  // opaque RGB565
-    FMT_RGB565_A8 = 1,  // RGB + alpha mask
-    FMT_A8        = 2,  // single-channel alpha (default black, tintable)
+    FMT_RGB565     = 0,  // opaque RGB565
+    FMT_RGB565_A8  = 1,  // RGB + alpha mask
+    FMT_A8         = 2,  // single-channel alpha (default black, tintable)
+    FMT_RGB565_RLE = 3,  // RLE compressed RGB565 (byte stream, not pixel array)
 }};
 
 #pragma pack(push, 1)
@@ -199,11 +238,12 @@ static inline const ImageBundleHeader* resHeader() {{
 static inline const ImageEntry* imageEntry(ImageId id) {{
     return &((const ImageEntry*)(RES_IMAGE_BUNDLE + 16))[id];
 }}
-static inline const uint16_t* imagePixels(ImageId id) {{
-    return (const uint16_t*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
+static inline const void* imagePixels(ImageId id) {{
+    return (const void*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
 }}
 static inline const uint8_t* imageAlpha(ImageId id) {{
     const ImageEntry* e = imageEntry(id);
+    if (e->format == FMT_RGB565_RLE) return 0;
     if (e->format != FMT_RGB565_A8) return 0;
     return (const uint8_t*)(RES_IMAGE_BUNDLE + e->offset
                            + (uint32_t)e->width * e->height * 2);
@@ -332,16 +372,25 @@ def main():
                     alpha_bytes = struct.pack(f"<{w*h}B", *alpha)
                     chunk = pix_bytes + alpha_bytes
                 else:
-                    # Fully opaque → plain RGB565, nothing to alpha-blend
+                    # Fully opaque → plain RGB565, try RLE
                     actual_fmt = FMT_RGB565
-                    chunk = pix_bytes
+                    rle = rle_encode_rgb565(pixels, w, h)
+                    chunk = rle if rle is not None else pix_bytes
+                    if rle is not None:
+                        actual_fmt = FMT_RGB565_RLE
             else:
                 if default_fmt == FMT_A8:
                     w, h, gray = pack_fn(p)
                     chunk = struct.pack(f"<{w*h}B", *gray)
                 else:
                     w, h, pixels = pack_fn(p)
-                    chunk = struct.pack(f"<{w*h}H", *pixels)
+                    # Try RLE for rgb565 images
+                    rle = rle_encode_rgb565(pixels, w, h)
+                    if rle is not None:
+                        actual_fmt = FMT_RGB565_RLE
+                        chunk = rle
+                    else:
+                        chunk = struct.pack(f"<{w*h}H", *pixels)
 
             entry = {
                 "id":     len(all_entries),
