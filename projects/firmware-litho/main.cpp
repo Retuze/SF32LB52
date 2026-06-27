@@ -1,6 +1,11 @@
 /**
  * @file main.cpp
- * @brief LithoUI SF32LB52 demo — icon grid with real images.
+ * @brief LithoUI SF32LB52 demo — icon grid.
+ *
+ * Flash speed on this chip: ~81 KiB/s (no cache/prefetch).
+ * All critical rendering code runs from RAM (.ramfunc).
+ * Image pixel data stays in Flash (.rodata) — acceptable for static UI.
+ * For smooth animation, use hardware LCDC peripheral.
  */
 
 extern "C" {
@@ -29,25 +34,6 @@ using namespace litho;
 static const int kScreenW = LCD_WIDTH_REF;
 static const int kScreenH = LCD_HEIGHT_REF;
 
-// ---- UART helpers ----
-static void uart_putc(char c) {
-    while ((USART1->ISR & (1UL << 7)) == 0U) {}
-    USART1->TDR = (uint8_t)c;
-}
-static void uart_puts(const char* s) {
-    while (*s) uart_putc(*s++);
-    while ((USART1->ISR & (1UL << 6)) == 0U) {}
-}
-
-// ---- Background view ----
-class BgView : public View {
-public:
-    void onDraw(Painter& p) override {
-        p.fillRect(0, 0, mBounds.width, mBounds.height, RGB565::fromRGB(18, 20, 26));
-    }
-};
-
-// ---- Icon grid activity ----
 class GalleryActivity : public Activity {
 public:
     void onCreate(Bundle&) override {
@@ -55,60 +41,45 @@ public:
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
 
-        auto* bg = new BgView();
-        bg->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
-        root->addView(bg);
-
-        // Title bar
-        root->addView(makeTitle());
-
-        // Icon grid: 3 columns, row height 120
-        static const int kCols = 3;
-        static const int kIconW = 90, kIconH = 90;
+        static const int kCols = 3, kIconW = 100, kIconH = 100;
         static const int kGapX = (kScreenW - kCols * kIconW) / (kCols + 1);
-        static const int kGapY = 20;
-        static const int kStartY = 40;
+        static const int kGapY = 15, kStartY = 40;
 
         ImageId icons[] = {
-            IMG_A_DIAL,      IMG_A_MESSAGES,   IMG_A_MUSIC,
-            IMG_A_SETTINGS,  IMG_A_CAMERA,     IMG_A_WEATHER,
-            IMG_A_CALENDAR,  IMG_A_COMPASS,    IMG_A_SPORTS,
-            IMG_A_SLEEP,     IMG_A_ALARM,      IMG_A_STOPWATCH,
+            IMG_DIAL, IMG_MESSAGES, IMG_MUSIC,
+            IMG_SETTINGS, IMG_CAMERA, IMG_WEATHER,
+            IMG_CALENDAR, IMG_COMPASS, IMG_SPORTS,
+            IMG_SLEEP, IMG_ALARM, IMG_STOPWATCH,
         };
-        int count = sizeof(icons) / sizeof(icons[0]);
-
-        for (int i = 0; i < count; i++) {
-            int col = i % kCols;
-            int row = i / kCols;
-            int cx = kGapX + col * (kIconW + kGapX);
-            int cy = kStartY + row * (kIconH + kGapY);
-
-            auto* iv = new ImageView(kIconW, kIconH);
-            iv->bounds() = {(int16_t)cx, (int16_t)cy, (int16_t)kIconW, (int16_t)kIconH};
-            iv->setImageId(icons[i]);
+        for (int i = 0; i < (int)(sizeof(icons)/sizeof(icons[0])); i++) {
+            int cx = kGapX + (i % kCols) * (kIconW + kGapX);
+            int cy = kStartY + (i / kCols) * (kIconH + kGapY);
+            auto* iv = new ImageView(icons[i]);
+            iv->bounds().x = (int16_t)cx;
+            iv->bounds().y = (int16_t)cy;
             root->addView(iv);
         }
+
     }
 
     void onResume() override {
         Activity::onResume();
         mWindow->rootView()->invalidate();
     }
-
-private:
-    View* makeTitle() {
-        auto* v = new View();
-        v->bounds() = {0, 0, (int16_t)kScreenW, 40};
-        // title drawn in onDraw
-        return v;  // placeholder, background handles the look
-    }
 };
 
-// ---- Entry point ----
+extern "C" {
+void enable_flash_cache_prefetch(void);
+}
+
 extern "C" int main()
 {
-    uart_puts("\r\n[litho] Gallery demo\r\n");
+    printf("\r\n[litho] Gallery\r\n");
     rcc_set_system_hz(240000000UL);
+
+    enable_flash_cache_prefetch();
+    printf("[litho] I+D Cache + MPI2 prefetch ON\r\n");
+
     lcd_ref_init();
 
     SF32Display display;
@@ -117,7 +88,7 @@ extern "C" int main()
     SF32Tick  tick;
 
     WindowManager wm(display, input, tick);
-    wm.initPFB(128, 128, 2);
+    wm.initPFB(390, 50, 2);  /* 50px blocks × pool=2: render/xfer pipeline */
 
     ActivityManager am(wm);
     am.registerActivity<GalleryActivity>("Gallery");
@@ -126,7 +97,7 @@ extern "C" int main()
     i.target = "Gallery";
     am.startActivity(i);
 
-    uart_puts("[litho] running\r\n");
+    printf("[litho] running\r\n");
     wm.run();
     return 0;
 }
