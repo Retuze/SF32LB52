@@ -90,7 +90,7 @@ Libraries are registered in `cmake/libraries.cmake` with `sdk_register_library()
 
 - picolibc is linked as `libc.a` + `libclang_rt.builtins-arm.a` (see `libc/CMakeLists.txt`)
 - Each project's `system.c` must provide syscall implementations: `_write`, `_read`, `_close`, `_lseek`
-- Current implementation routes stdout via RTT (`ll_rtt_putchar`)
+- Current implementation routes stdout via USART1 (see `system.c` `_write()` → `uart_write_byte()`). RTT is also available as an alternative (`ll_rtt.c`).
 - `startup.c` handles data/bss init, TLS setup (`_init_tls`/`_set_tls`), and the ISR vector table
 - When changing `-mcpu`/`-mfpu`, update `PICOLIBC_MULTILIB_DIR` to match
 
@@ -121,10 +121,197 @@ Libraries are registered in `cmake/libraries.cmake` with `sdk_register_library()
 
 | Binary | Base address | Max size |
 |--------|-------------|----------|
-| Bootloader | `0x12000000` | 32 KB |
+| ftab (分区表) | `0x12000000` | 32 KB |
+| Bootloader | `0x12010000` | 64 KB |
 | Firmware | `0x12020000` | ~14 MB |
 
 Use `sftool write_flash <elf>` — ELF sections contain addresses, no manual `@addr` needed.
+
+## Serial Log Capture
+
+串口日志通过 USART1 输出 (TX: pad 19 / PA06, RX: pad 18 / PA05)。
+
+**参数：**
+- 波特率: **1,000,000** (1 Mbps)
+- 数据位: 8, 停止位: 1, 校验: None
+- 设备: CH340 USB-Serial (开发板上)
+
+**抓日志方法：**
+
+```powershell
+# 1. 打开串口 (RTS 初始 HIGH)
+$port = New-Object System.IO.Ports.SerialPort COM31, 1000000, 'None', 8, 'One'
+$port.RtsEnable = $true   # RTS HIGH
+$port.DtrEnable = $true
+$port.Open()
+
+# 2. 开始读取
+# ... (启动读取循环)
+
+# 3. RTS HIGH → LOW 触发 MCU 复位
+$port.RtsEnable = $false  # RTS LOW → 复位
+
+# 4. 接收启动日志
+# ROM 输出 "SFBL" banner, bootloader 输出 "[BOOT] ...", firmware 输出应用日志
+```
+
+**启动日志字符含义** (firmware `startup.c`):
+
+| 字符 | 阶段 |
+|------|------|
+| `R` | Reset_Handler 入口 |
+| `D` | 拷贝 .data |
+| `F` | 拷贝 .ramfunc |
+| `B` | 清零 .bss |
+| `T` | 清零 .tbss |
+| `L` | TLS 初始化 |
+| `C` | C++ 静态构造 |
+| `S` | SystemInit |
+| `M` | 进入 main() |
+| `!` | 异常/fault（新版会打印 CFSR/HFSR/MMFAR/BFAR 诊断信息） |
+
+## Flash Performance (benchmark)
+
+芯片: SF32LB52 @ 240 MHz, SPI Flash: Puya P25Qxx (Quad QSPI 48 MHz).
+
+`projects/benchmark` 测试 4 种拷贝场景：代码在 Flash vs RAM，数据从 Flash vs SRAM。
+相同 32-bit word loop，20 KB × 100 次 = 1953 KiB。
+
+| 场景 | 代码位置 | 数据方向 | Uncached | Cached+Prefetch |
+|------|---------|---------|----------|-----------------|
+| flash F→S | Flash | Flash→SRAM | 336 KiB/s | 25,613 KiB/s |
+| flash S→S | Flash | SRAM→SRAM | 438 KiB/s | 40,686 KiB/s |
+| ram F→S | RAM | Flash→SRAM | 7,966 KiB/s | 24,531 KiB/s |
+| ram S→S | RAM | SRAM→SRAM | 30,523 KiB/s | 38,991 KiB/s |
+
+**结论：**
+
+- **不开 Cache 时，Flash 代码是灾难**：取指令占满 QSPI 总线，flash S→S (438) 跟 flash F→S (336) 差不多惨。代码搬 RAM 后 ram F→S 快 23×，ram S→S 快 69×。
+- **开 Cache 后代码位置无所谓**：I-Cache 消除取指开销，flash F→S ≈ ram F→S，flash S→S ≈ ram S→S。
+- **Flash 介质瓶颈不可消除**：即使开 Cache，Flash→SRAM (~25K) 仍比 SRAM→SRAM (~40K) 慢 ~40%。
+- **Cache/MPU 初始化必须从 RAM 执行**（`SF32_RAMFUNC`），否则在 Flash 上修改 Flash 的 MPU 属性会触发 IACCVIOL。
+
+## LithoUI Render Optimization
+
+`firmware-litho` Gallery (390×450, 12 个 100×100 icon, PFB 390×50 tile × pool=2)。
+
+### 优化过程
+
+| 版本 | 改动 | draw | xfer | 总帧 | FPS |
+|------|------|------|------|------|------|
+| 原始 (-O0) | — | 20,547 µs | 85,140 µs | 105,774 µs | ~9.5 |
+| (1) fillRect 32-bit | `painter.hpp` 16→32 bit store | 18,000 µs | 85,140 µs | ~103,000 µs | ~10 |
+| (2) -Os 编译 | CMake release preset | — | 21,354 µs | — | — |
+| (3) tile memset | PFB acquire 时 32-bit 清零替代 BgView | — | — | — | — |
+| **最终 (-Os)** | (1)+(2)+(3) | **13,449 µs** | **21,392 µs** | **36,361 µs** | **~27.5** |
+
+### 最终阶段明细 (-Os)
+
+| 阶段 | 耗时 | 说明 |
+|------|------|------|
+| setup (含 memset) | 1,479 µs | 9 tiles × 164 µs, 32-bit word 清零 39KB/tile |
+| draw (view 树 + 图标) | 13,449 µs | 纯 drawImage，无 fillRect |
+| xfer (bitblt LCD) | 21,392 µs | bit-banged QSPI GPIO |
+| **总帧** | **36,361 µs** | ~27.5 FPS |
+
+per-tile draw 明细（9 tiles，每个 tile 覆盖不同数量的图标行）：
+
+| Tile | y 范围 | 命中图标/行数 | draw 耗时 |
+|------|--------|-------------|-----------|
+| 0 | 0-49 | 3 icon × 10 行 | 381 µs |
+| 1 | 50-99 | 3 icon × 50 行 | 1,768 µs |
+| 2 | 100-149 | 6 icon (40+10) | 1,467 µs |
+| 3 | 150-199 | 3 icon × 50 行 | 1,655 µs |
+| 4 | 200-249 | 6 icon (40+10) | 1,847 µs |
+| 5 | 250-299 | 3 icon × 50 行 | 1,327 µs |
+| 6 | 300-349 | 6 icon (40+10) | 1,833 µs |
+| 7 | 350-399 | 3 icon × 50 行 | 1,323 µs |
+| 8 | 400-449 | 3 icon × 40 行 | 1,844 µs |
+
+### 与 benchmark 数据对比
+
+benchmark 数据（-O0, cached+prefetch, 32-bit word loop）：
+
+| 操作 | benchmark | Gallery (-Os) | 差异 |
+|------|-----------|---------------|------|
+| SRAM 写 (memset) | 39 MB/s (读+写) | **237 MB/s** (纯写) | 6×, -Os + 写合并 |
+| Flash→SRAM (drawImage) | 25 MB/s | **17.85 MB/s** | -29% |
+
+drawImage 比 benchmark 慢 29% 是合理的：
+- benchmark：一次性 20KB 大块拷贝，循环零开销
+- Gallery：36 次 partial call，每次 ~107 µs 固定开销（clip 计算 + 函数调用 + per-row 指针计算）
+- 240KB / 25MB/s = 9,600 µs（理想），实际 13,449 µs，差额 3,849 µs = 36 × 107 µs
+
+### 优化项总结
+
+**1. fillRect 32-bit store** (`painter.hpp`) — 16-bit → 32-bit word fill, 吞吐翻倍
+
+**2. Tile memset 替代 BgView** (`pfb.hpp`) — PFB acquire 时 32-bit 清零 tile buffer，省掉 BgView 这个 view 的遍历+fillRect 调用
+
+**3. ViewGroup 快路径尝试** (`view_group.hpp`) — 试图对无平移、无透明度的子 view 跳过 Painter 拷贝。但只有位置 (0,0) 的 view 能安全复用父 Painter（否则 screenOrigin 不对），实际场景中很少命中，基本是无效优化。
+
+**4. Cache/MPU 初始化移入 RAM** (`cache_init.c`) — `SF32_RAMFUNC` 标记，避免 IACCVIOL
+
+**5. 编译优化 -Os** — 单开一行，编译器自动内联、循环优化、bitblt 函数调用开销消除，整体 3.6× 提升
+
+## LithoUI 图片格式与 RLE 渲染
+
+### 资源打包（重要陷阱）
+
+`res_images.bin` 由 `tools/pack_res.py` **手动**生成，是 checked-in 预生成文件，**不在 CMake 构建流程里**。改了 `ui/hello_litho/{rgb565,rgba,grayscale,rotatable}/` 下的源图后必须手动重打包：
+
+```bash
+python components/lithoui/tools/pack_res.py components/lithoui/ui/hello_litho components/lithoui/generated
+```
+
+**`.incbin` 依赖陷阱**：`generated/res_embed.S` 用 `.incbin` 嵌入 `res_images.bin`，但汇编 `.incbin` 的依赖 CMake/Ninja **默认不跟踪** → bundle 更新后 `.S` 文件没变就不会重编，固件里嵌的是旧 bin 而 `.h` 是新的 → enum/offset 错位、图标全乱。已用 `OBJECT_DEPENDS`（`components/lithoui/CMakeLists.txt`）根治。诊断：`llvm-nm firmware-litho.elf | grep binary_res_images`，看 `end-start` 是否等于当前 bin 大小。
+
+### 格式选择与 ImageView
+
+| 源目录 | 前缀 | 格式 |
+|--------|------|------|
+| `rgb565/` | (无) | RGB565，RLE 更小则用 RLE (fmt 3) |
+| `rgba/` | `A_` | RGB565_A8 (fmt 1)，全不透明退 RLE/RGB565 |
+| `grayscale/` | `G_` | A8 (fmt 2)，tint 着色 |
+| `rotatable/` | `R_` | RGB565_A8 + sin 表 |
+
+`ImageView::onDraw` 按 `e->format` 真实格式绘制（fmt 1 传 `imageAlpha()` 做 mask 合成、fmt 2 A8、fmt 3 RLE、fmt 0 word-copy 快路径），不再一律当 fmt 0 丢 alpha。`ImageView(ImageId)` 默认跟随图片原生尺寸；`ImageView(w,h)` 才固定尺寸（缩放/裁剪用）。
+
+### draw = Flash 读带宽受限
+
+同样 12 个 100×100 图标（120K 像素），三种格式 draw 差一个数量级，**正比于 Flash 读量**：
+
+| 格式 | Flash 读量 | draw |
+|------|-----------|------|
+| RGB565_A8（alpha 合成） | 360 KB | 33,697 µs |
+| RGB565（word-copy） | 240 KB | 13,449 µs |
+| RLE | ~34 KB | 5,762 µs |
+
+draw 是 **Flash→SRAM 带宽受限**，读得越少越快。RLE 即使逐像素解码，省下的 Flash 读量远超解码开销（图标大色块时）。
+
+### RLE 行偏移表
+
+格式 `[uint32_t off[h]][每行自包含命令流]`；cmd 字节 = `bit7(类型) | bit6:0(count-1, 1~128)`：run=`[cmd][color]`、literal=`[cmd][px×n]`。`off[]` 让 PFB 分块时 `off[srcOffY]` **O(1) 跳到起始行**，避免每个 tile 从第 0 行重复解码。A/B 开关 `LITHO_RLE_NO_OFFSET_TABLE`（`painter.hpp`）实测：
+
+| 场景 | RLE 率 | 每行 cmd | 带表 | 无表 | 差异 |
+|------|--------|---------|------|------|------|
+| 12×100px 图标 | 14% | ~49 B | 5,762 | 6,245 | +8.4% |
+| 360×360 卡通图 | 51% | 366 B | 10,748 | 37,828 | **+252%** |
+
+无表 per-tile 随 tile 单调递增（O(n²) skip），带表平坦（O(n)）。价值 ∝ skip 行数 × 每行 cmd 字节：**小图可有可无，大图/低压缩图不可或缺**（代价仅 `h×4` 字节）。
+
+### RLE 解码优化与理论极限
+
+硬件：Flash 72MHz QSPI 4线 STR = 36 MB/s 峰值（cached XIP 实测 ~25 MB/s）；SRAM 写 237 MB/s（瓶颈是 CPU 240MHz 发 store，非 SRAM 280MHz）。
+
+优化（`painter.hpp` RLE 段）：clip 从 per-pixel 提到 run 级（一次交集）+ run 用 32-bit word-fill + literal 用 memcpy：
+
+| 场景 | run 长 | 优化前 | 优化后 | 离理论极限 |
+|------|--------|--------|--------|-----------|
+| 12 图标 | ~12px | 5,762 µs | **2,932 µs (−49%)** | 1.23×（基本到顶）|
+| 360 大图 | ~3px | 10,748 µs | 9,252 µs (−14%) | 1.44× |
+
+图标 cyc/px 11.5→5.9（理论底 ~4.8）。run 越长批量写收益越大；低压缩图被密集 literal memcpy 限制。**优化后 draw 已非瓶颈**（图标 draw 占总帧 11%，xfer bit-bang QSPI 占 83%）。
 
 ## Key conventions
 
