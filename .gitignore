@@ -10,3 +10,4 @@ Thumbs.db
 *.bin
 components/lithoui/generated/res_images.bin
 __pycache__/
+.claude/
