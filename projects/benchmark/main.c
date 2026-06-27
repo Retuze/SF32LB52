@@ -198,6 +198,50 @@ void enable_flash_cache_prefetch(void)
     __asm volatile("dsb"); __asm volatile("isb");
 }
 
+/* ─────────────────────────────────────────────────────────────────────────
+ * GPIO toggle-speed benchmark — the bit-bang QSPI ceiling.
+ * "single store" includes loop overhead; the 12-writes/px loop amortizes it
+ * and reveals the true per-store issue rate (the write buffer hides the bus
+ * latency, so back-to-back stores issue ~1 cycle each).
+ * ───────────────────────────────────────────────────────────────────────── */
+SF32_RAMFUNC __attribute__((noinline))
+static uint32_t gpio_store_loop(volatile uint32_t* reg, uint32_t v, uint32_t iters) {
+    uint32_t t0 = DWT_CYCCNT;
+    for (uint32_t i = 0; i < iters; i++) *reg = v;
+    return DWT_CYCCNT - t0;
+}
+SF32_RAMFUNC __attribute__((noinline))
+static uint32_t gpio_pixel12_loop(HPSYS_GPIO_TypeDef* g, uint32_t m, uint32_t px) {
+    uint32_t t0 = DWT_CYCCNT;
+    for (uint32_t i = 0; i < px; i++) {
+        g->DOCR0.R=m; g->DOSR0.R=m; g->DOSR0.R=m;
+        g->DOCR0.R=m; g->DOSR0.R=m; g->DOSR0.R=m;
+        g->DOCR0.R=m; g->DOSR0.R=m; g->DOSR0.R=m;
+        g->DOCR0.R=m; g->DOSR0.R=m; g->DOSR0.R=m;
+    }
+    return DWT_CYCCNT - t0;
+}
+static void bench_gpio(void) {
+    HPSYS_GPIO_TypeDef* g = HPSYS_GPIO;
+    uint32_t m = (1u << 4);  /* arbitrary output bit (LCD_CLK pad) */
+    const uint32_t N = 240000;
+    uint32_t cs  = gpio_store_loop(&g->DOSR0.R, m, N);
+    uint32_t pxn = N / 12;
+    uint32_t cp  = gpio_pixel12_loop(g, m, pxn);
+    g->DOCR0.R = m;
+    uint32_t cyc_px = cp / pxn;
+    printf("=== GPIO toggle (bit-bang QSPI ceiling) ===\r\n");
+    printf("  single store    : %lu.%02lu cyc/write\r\n",
+           (unsigned long)(cs/N), (unsigned long)((cs%N)*100/N));
+    printf("  bit-bang 12w/px : %lu.%02lu cyc/px\r\n",
+           (unsigned long)(cp/pxn), (unsigned long)((cp%pxn)*100/pxn));
+    if (cyc_px)
+        printf("    -> %lu.%lu Mpx/s  %lu.%lu MB/s  QSPI clk ~%lu.%lu MHz (4 clk/px)\r\n",
+               (unsigned long)(2400u/cyc_px/10), (unsigned long)(2400u/cyc_px%10),
+               (unsigned long)(4800u/cyc_px/10), (unsigned long)(4800u/cyc_px%10),
+               (unsigned long)(9600u/cyc_px/10), (unsigned long)(9600u/cyc_px%10));
+}
+
 int main(void)
 {
     printf("\r\n[bench] Copy speed test\r\n");
@@ -230,6 +274,8 @@ int main(void)
                copy_words_ram, (const uint32_t*)flashData, (uint32_t*)sramBuf2);
     bench_copy("ram S->S", copyBytes, SEQ_REPS,
                copy_words_ram, (const uint32_t*)sramBuf, (uint32_t*)sramBuf2);
+
+    bench_gpio();
 
     printf("[bench] done\r\n");
     while (1) { delay(1000); }
