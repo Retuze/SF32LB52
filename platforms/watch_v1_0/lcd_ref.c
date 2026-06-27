@@ -124,49 +124,41 @@ lcd_push_pixels_ram(HPSYS_GPIO_TypeDef *gpio, const uint16_t *src,
                     uint32_t d0_mask, uint32_t d1_mask,
                     uint32_t d2_mask, uint32_t d3_mask, uint32_t data_mask)
 {
-    // 16-entry lookup table: nibble → {set_mask, clr_mask}
-    uint32_t nib_set[16], nib_clr[16];
-    for (uint32_t n = 0U; n < 16U; ++n) {
-        uint32_t s = 0U;
-        if (n & 1U) s |= d0_mask;
-        if (n & 2U) s |= d1_mask;
-        if (n & 4U) s |= d2_mask;
-        if (n & 8U) s |= d3_mask;
-        nib_set[n] = s;
-        nib_clr[n] = (data_mask & ~s) | clk_mask;
+    // LCD_D0..D3 are consecutive GPIO bits, so a nibble maps onto the data
+    // lines with a single shift — no per-nibble lookup table. And clr is a
+    // constant (clear all data + clk; the following DOSR sets the wanted bits
+    // back), so the inner loop is pure shift/mask + stores, zero table loads.
+    _Static_assert(LCD_D1 == LCD_D0 + 1 && LCD_D2 == LCD_D0 + 2 &&
+                   LCD_D3 == LCD_D0 + 3 && LCD_D0 >= 4,
+                   "optimized push needs consecutive D0..D3 with D0>=4");
+    (void)d0_mask; (void)d1_mask; (void)d2_mask; (void)d3_mask;
+
+    const uint32_t dm  = data_mask;             // 0xF << LCD_D0
+    const uint32_t clr = data_mask | clk_mask;  // clear data + clk (constant)
+    const uint32_t ck  = clk_mask;
+
+    // 4-pixel unrolled with 32-bit source loads — amortizes loop overhead and
+    // halves the source loads. Each nibble keeps 3 writes (data, then constant
+    // clk-high) so the store pipeline stays intact and data setup is preserved.
+    #define PUSH(px) do { uint32_t _c = (px); \
+        gpio->DOCR0.R = clr; gpio->DOSR0.R = (_c >> (12 - LCD_D0)) & dm; gpio->DOSR0.R = ck; \
+        gpio->DOCR0.R = clr; gpio->DOSR0.R = (_c >> (8  - LCD_D0)) & dm; gpio->DOSR0.R = ck; \
+        gpio->DOCR0.R = clr; gpio->DOSR0.R = (_c << (LCD_D0 - 4))  & dm; gpio->DOSR0.R = ck; \
+        gpio->DOCR0.R = clr; gpio->DOSR0.R = (_c << LCD_D0)        & dm; gpio->DOSR0.R = ck; \
+    } while (0)
+
+    uint32_t n = pixel_count;
+    const uint16_t* s = src;
+    while (n >= 4U) {
+        uint32_t a = *(const uint32_t*)(const void*)s;        // px 0,1
+        uint32_t b = *(const uint32_t*)(const void*)(s + 2);  // px 2,3
+        PUSH(a & 0xFFFFU); PUSH(a >> 16);
+        PUSH(b & 0xFFFFU); PUSH(b >> 16);
+        s += 4; n -= 4U;
     }
+    while (n--) { PUSH((uint32_t)*s); ++s; }
+    #undef PUSH
 
-    for (uint32_t i = 0U; i < pixel_count; ++i) {
-        uint16_t c  = src[i];
-        uint8_t  hi = (uint8_t)(c >> 8);
-        uint8_t  lo = (uint8_t)(c & 0xFFU);
-
-        uint32_t s, clr;
-
-        s   = nib_set[hi >> 4];
-        clr = nib_clr[hi >> 4];
-        gpio->DOCR0.R = clr;
-        gpio->DOSR0.R = s;
-        gpio->DOSR0.R = clk_mask;
-
-        s   = nib_set[hi & 0xFU];
-        clr = nib_clr[hi & 0xFU];
-        gpio->DOCR0.R = clr;
-        gpio->DOSR0.R = s;
-        gpio->DOSR0.R = clk_mask;
-
-        s   = nib_set[lo >> 4];
-        clr = nib_clr[lo >> 4];
-        gpio->DOCR0.R = clr;
-        gpio->DOSR0.R = s;
-        gpio->DOSR0.R = clk_mask;
-
-        s   = nib_set[lo & 0xFU];
-        clr = nib_clr[lo & 0xFU];
-        gpio->DOCR0.R = clr;
-        gpio->DOSR0.R = s;
-        gpio->DOSR0.R = clk_mask;
-    }
     gpio->DOCR0.R = clk_mask;
 }
 
