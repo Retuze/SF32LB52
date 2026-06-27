@@ -42,6 +42,7 @@ FMT_RGB565     = 0
 FMT_RGB565_A8  = 1   # RGBA with alpha mask
 FMT_A8         = 2   # single-channel alpha (tintable, default black)
 FMT_RGB565_RLE = 3   # RLE compressed RGB565
+FMT_PAL8_RLE   = 4   # 256-color palette (RGB565) + byte-RLE 8-bit index
 
 FLAG_HAS_SIN  = 0x0001
 
@@ -49,6 +50,7 @@ PRE_RGB565 = ""
 PRE_RGBA   = "A_"
 PRE_GRAY   = "G_"
 PRE_ROT    = "R_"
+PRE_PAL    = "P_"
 
 
 # ── helpers ──
@@ -120,6 +122,49 @@ def rle_encode_rgb565(pixels, w, h):
                     out.append((pc >> 8) & 0xFF)
                 x += lit
     return bytes(out) if len(out) < w * h * 2 else None
+
+
+def pack_palette(path):
+    """PNG -> 256-color palette (RGB565) + 8-bit index. Returns (w,h,index,pal565)."""
+    img = Image.open(path).convert("RGB")
+    q = img.quantize(colors=256, method=Image.MEDIANCUT)
+    w, h = q.size
+    idx = list(q.getdata())                 # 0..255 per pixel
+    pal = q.getpalette() or []
+    ncol = min(256, len(pal) // 3)
+    pal565 = [rgba_to_rgb565(pal[i*3], pal[i*3+1], pal[i*3+2]) for i in range(ncol)]
+    return w, h, idx, pal565
+
+
+def byte_rle_encode(idx, w, h):
+    """RLE 8-bit indices, same scheme as rle_encode_rgb565 but 1-byte values.
+    Layout: [uint32 off[h]][per-row cmd stream]. cmd: bit7=type, bit6:0=count-1.
+      run     (bit7=0): [cmd][index]
+      literal (bit7=1): [cmd][index x n]"""
+    out = bytearray(h * 4)
+    for y in range(h):
+        struct.pack_into('<I', out, y * 4, len(out))
+        row = idx[y * w:(y + 1) * w]
+        x = 0
+        while x < w:
+            c = row[x]
+            run = 1
+            while x + run < w and run < 128 and row[x + run] == c:
+                run += 1
+            if run >= 2:
+                out.append(run - 1)
+                out.append(c)
+                x += run
+            else:
+                lit = 1
+                while x + lit < w and lit < 128:
+                    if x + lit + 1 < w and row[x + lit + 1] == row[x + lit]:
+                        break
+                    lit += 1
+                out.append(0x80 | (lit - 1))
+                out.extend(row[x:x + lit])
+                x += lit
+    return bytes(out)
 
 
 def pack_grayscale(path):
@@ -199,6 +244,7 @@ enum ImageFormat {{
     FMT_RGB565_A8  = 1,  // RGB + alpha mask
     FMT_A8         = 2,  // single-channel alpha (default black, tintable)
     FMT_RGB565_RLE = 3,  // RLE compressed RGB565 (byte stream, not pixel array)
+    FMT_PAL8_RLE   = 4,  // 256-color palette (512B RGB565) + byte-RLE 8-bit index
 }};
 
 #pragma pack(push, 1)
@@ -348,6 +394,7 @@ def main():
         ("rgba",      PRE_RGBA,   FMT_RGB565_A8, pack_rgba,      True),
         ("grayscale", PRE_GRAY,   FMT_A8,        pack_grayscale, False),
         ("rotatable", PRE_ROT,    FMT_RGB565_A8, pack_rgba,      True),
+        ("palette",   PRE_PAL,    FMT_PAL8_RLE,  pack_palette,   False),
     ]
 
     all_entries = []
@@ -365,7 +412,11 @@ def main():
         for p in pngs:
             name = p.stem
             actual_fmt = default_fmt
-            if has_mask:
+            if default_fmt == FMT_PAL8_RLE:
+                w, h, idx, pal565 = pack_palette(p)
+                pal_bytes = struct.pack("<256H", *(list(pal565) + [0] * (256 - len(pal565))))
+                chunk = pal_bytes + byte_rle_encode(idx, w, h)
+            elif has_mask:
                 w, h, pixels, alpha, has_alpha = pack_fn(p)
                 pix_bytes = struct.pack(f"<{w*h}H", *pixels)
                 if has_alpha:

@@ -49,7 +49,8 @@ typedef enum ImageId {
     IMG_R_MIN = 40,
     IMG_R_SEC = 41,
     IMG_R_TEST = 42,
-    IMG_COUNT = 43
+    IMG_P_03 = 43,
+    IMG_COUNT = 44
 } ImageId;
 
 enum ImageFormat {
@@ -57,6 +58,7 @@ enum ImageFormat {
     FMT_RGB565_A8  = 1,  // RGB + alpha mask
     FMT_A8         = 2,  // single-channel alpha (default black, tintable)
     FMT_RGB565_RLE = 3,  // RLE compressed RGB565 (byte stream, not pixel array)
+    FMT_PAL8_RLE   = 4,  // 256-color palette (512B RGB565) + byte-RLE 8-bit index
 };
 
 #pragma pack(push, 1)

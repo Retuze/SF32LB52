@@ -234,6 +234,56 @@ public:
             return;
         }
 
+        // PAL8 RLE — fmt=4: [512B RGB565 palette][off table][byte-RLE 8-bit idx]
+        // Same row-offset RLE as fmt 3, but values are palette indices: a run
+        // word-fills palette[idx]; a literal does a per-pixel palette lookup.
+        if (fmt == 4 && mAlpha == 255 && !tint && !mask) {
+            const uint16_t* pal = (const uint16_t*)src;
+            const uint8_t*  rle = (const uint8_t*)src + 512;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint16_t* tile = mTile->buffer();
+            int tStride = mTile->stride();
+            const int visL = srcOffX;
+            const int visR = srcOffX + copyW;
+            const uint8_t* p = rle + off[srcOffY];
+            for (int y = 0; y < copyH; y++) {
+                uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
+                int px = 0;
+                while (px < srcW) {
+                    uint8_t cmd = *p++;
+                    int n = (cmd & 0x7F) + 1;
+                    int runR = px + n;
+                    int cl = px   < visL ? visL : px;
+                    int cr = runR > visR ? visR : runR;
+                    if (cmd & 0x80) {
+                        // literal: n index bytes → per-pixel palette lookup
+                        if (cr > cl) {
+                            const uint8_t* sp = p + (cl - px);
+                            uint16_t* dp = dstRow + (cl - visL);
+                            int cnt = cr - cl;
+                            for (int k = 0; k < cnt; k++) dp[k] = pal[sp[k]];
+                        }
+                        p += n;
+                    } else {
+                        // run: one index ×n → palette → 32-bit word fill
+                        uint16_t c = pal[*p]; p++;
+                        if (cr > cl) {
+                            uint16_t* dp = dstRow + (cl - visL);
+                            int cnt = cr - cl;
+                            if (cnt && ((uintptr_t)dp & 3)) { *dp++ = c; --cnt; }
+                            uint32_t c32 = ((uint32_t)c << 16) | c;
+                            uint32_t* d4 = (uint32_t*)dp;
+                            int wc = cnt >> 1;
+                            for (int i = 0; i < wc; i++) d4[i] = c32;
+                            if (cnt & 1) dp[cnt - 1] = c;
+                        }
+                    }
+                    px = runR;
+                }
+            }
+            return;
+        }
+
         // General path
         uint16_t* dstBuf    = mTile->buffer();
         uint32_t  viewA     = mAlpha;
