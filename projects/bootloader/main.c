@@ -28,18 +28,49 @@ static void uart_puts(const char *s)
     while ((USART1->ISR & USART_ISR_TC) == 0U) {}
 }
 
+static void uart_put_hex32(uint32_t v)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    uart_puts("0x");
+    for (int i = 28; i >= 0; i -= 4) {
+        uart_putc(hex[(v >> i) & 0xFU]);
+    }
+}
+
+static void dump_words(const char *tag, const uint32_t *p, int count)
+{
+    uart_puts(tag);
+    for (int i = 0; i < count; i++) {
+        uart_puts(" ");
+        uart_put_hex32(p[i]);
+    }
+    uart_puts("\r\n");
+}
+
 __attribute__((noreturn)) static void jump_to_app(uint32_t addr)
 {
     uint32_t *vt = (uint32_t *)addr;
     uint32_t app_sp = vt[0];
     uint32_t app_reset = vt[1] | 1U;
 
+    uart_puts("[BOOT] app vector:");
+    dump_words("", vt, 4);
+    uart_puts("[BOOT] app SP=");
+    uart_put_hex32(app_sp);
+    uart_puts(" reset=");
+    uart_put_hex32(app_reset);
+    uart_puts("\r\n");
+
+    if ((app_sp == 0xCCCCCCCCU) || (app_reset == 0xCCCCCCCDU)) {
+        uart_puts("[BOOT] invalid app vector, halt\r\n");
+        while (1) {}
+    }
+
     __asm volatile("cpsid i" ::: "memory");
     SYST_CSR = 0U;
     SCB_VTOR = addr;
     __asm volatile("dsb");
     __asm volatile("isb");
-    __asm volatile("cpsie i" ::: "memory");
     __asm volatile(
         "msr msp, %0\n"
         "bx %1\n"
@@ -61,8 +92,17 @@ int main(void)
     uart_puts("[BOOT] Setting clock to 240MHz...\r\n");
     rcc_set_system_hz(240000000UL);
 
-    /* Step 3: Keep ROM bootloader's UART1 1 Mbps configuration */
-    uart_puts("[BOOT] Clock done, keeping ROM UART1 config\r\n");
+    dump_words("[BOOT] app before init:", (const uint32_t *)(uintptr_t)&APPLICATION_ADDR, 4);
+
+    /* Step 2.5: Enable DLL2 + configure MPI2 Flash for quad QSPI at 48MHz.
+     * Must run from RAM — modifying MPI2 while executing from Flash = crash. */
+    uart_puts("[BOOT] Configuring Flash Quad QSPI...\r\n");
+    {
+        extern void boot_flash_quad_init(void);
+        boot_flash_quad_init();
+    }
+    dump_words("[BOOT] app after init:", (const uint32_t *)(uintptr_t)&APPLICATION_ADDR, 4);
+    uart_puts("[BOOT] Flash Quad QSPI ready\r\n");
 
     /* Step 4: Init LED */
     pinMode(LED_RED, OUTPUT);

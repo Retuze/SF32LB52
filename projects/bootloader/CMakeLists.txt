@@ -4,6 +4,7 @@ add_executable(bootloader
     main.c
     startup.c
     system.c
+    flash_quad_init.c
 )
 
 target_include_directories(bootloader PRIVATE
