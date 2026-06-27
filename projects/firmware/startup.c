@@ -27,25 +27,78 @@ extern char   __tls_base[];
 
 extern int main(void);
 
+#define USART_ISR_TXE  (1UL << 7)
+#define USART_ISR_TC   (1UL << 6)
+
+static void early_uart_putc(char c)
+{
+    while ((USART1->ISR & USART_ISR_TXE) == 0U) {}
+    USART1->TDR = (uint8_t)c;
+    while ((USART1->ISR & USART_ISR_TC) == 0U) {}
+}
+
+static void early_uart_puts(const char *s)
+{
+    while (*s) { early_uart_putc(*s++); }
+}
+
+static void early_uart_hex32(uint32_t v)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    early_uart_puts("0x");
+    for (int i = 28; i >= 0; i -= 4) {
+        early_uart_putc(hex[(v >> i) & 0xFU]);
+    }
+}
+
+/* Fault status registers (Cortex-M33) */
+#define SCB_CFSR  (*(volatile uint32_t*)0xE000ED28U)
+#define SCB_HFSR  (*(volatile uint32_t*)0xE000ED2CU)
+#define SCB_MMFAR (*(volatile uint32_t*)0xE000ED34U)
+#define SCB_BFAR  (*(volatile uint32_t*)0xE000ED38U)
+
 static void Default_Handler(void)
 {
+    uint32_t cfsr = SCB_CFSR;
+    uint32_t hfsr = SCB_HFSR;
+    uint32_t mmfar = SCB_MMFAR;
+    uint32_t bfar  = SCB_BFAR;
+
+    early_uart_puts("\r\n! FAULT ");
+    early_uart_puts("CFSR=");  early_uart_hex32(cfsr);
+    early_uart_puts(" HFSR="); early_uart_hex32(hfsr);
+    early_uart_puts(" MMFAR="); early_uart_hex32(mmfar);
+    early_uart_puts(" BFAR=");  early_uart_hex32(bfar);
+    early_uart_puts("\r\n");
+
+    /* Decode common fault types */
+    if (cfsr & (1U << 25)) { early_uart_puts("  DIVBYZERO\r\n"); }
+    if (cfsr & (1U << 24)) { early_uart_puts("  UNALIGNED\r\n"); }
+    if (cfsr & (1U << 1))  { early_uart_puts("  IACCVIOL (instruction access)\r\n"); }
+    if (cfsr & (1U << 0))  { early_uart_puts("  DACCVIOL (data access)\r\n"); }
+    if (hfsr & (1U << 30)) { early_uart_puts("  FORCED (escalated)\r\n"); }
+    if (hfsr & (1U << 1))  { early_uart_puts("  VECTBL (vector table read)\r\n"); }
+
     while (1) {
     }
 }
 
 void Reset_Handler(void)
 {
+    early_uart_putc('R');
     size_t *src = &__data_load__;
     size_t *dst = &__data_start__;
 
     __asm volatile("msr msplim, %0" : : "r"(&__StackLimit) : "memory");
 
     /* Copy .data from ROM to RAM */
+    early_uart_putc('D');
     while (dst < &__data_end__) {
         *dst++ = *src++;
     }
 
     /* Copy .ramfunc if present */
+    early_uart_putc('F');
     if (&__ramfunc_start__ != 0 && &__ramfunc_end__ != 0 && &__ramfunc_load__ != 0) {
         src = &__ramfunc_load__;
         dst = &__ramfunc_start__;
@@ -55,29 +108,35 @@ void Reset_Handler(void)
     }
 
     /* Zero .bss */
+    early_uart_putc('B');
     dst = &__bss_start__;
     while (dst < &__bss_end__) {
         *dst++ = 0;
     }
 
     /* Zero .tbss */
+    early_uart_putc('T');
     dst = (size_t *)&__tbss_start;
     while (dst < (size_t *)&__tbss_end) {
         *dst++ = 0;
     }
 
+    early_uart_putc('L');
     _init_tls(__tls_base);
     _set_tls(__tls_base);
 
     /* Call C++ static constructors (init_array). */
+    early_uart_putc('C');
     extern void (*__init_array_start[])(void);
     extern void (*__init_array_end[])(void);
     for (void (**p)(void) = __init_array_start; p < __init_array_end; p++) {
         (*p)();
     }
 
+    early_uart_putc('S');
     SystemInit();
     __asm volatile("cpsie i" ::: "memory");
+    early_uart_putc('M');
     main();
 
     while (1) {

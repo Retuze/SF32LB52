@@ -12,7 +12,7 @@ __ROM_SIZE    = 0x00E00000;
 __RAM_BASE    = 0x20000000;
 __RAM_SIZE    = 0x00080000;
 __STACK_SIZE  = 0x00004000;
-__HEAP_SIZE   = 0x00020000;
+__HEAP_SIZE   = 0x00018000;  /* 96 KB — PFB tiles ~77 KB + margin */
 
 __StackTop    = __RAM_BASE + __RAM_SIZE;
 __StackLimit  = __StackTop - __STACK_SIZE;

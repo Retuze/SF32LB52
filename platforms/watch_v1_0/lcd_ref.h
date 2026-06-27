@@ -35,6 +35,10 @@ void lcd_ref_bitblt(uint16_t x, uint16_t y,
                     uint16_t w, uint16_t h,
                     const uint16_t* rgb565);
 
+/** RAM-based fast buffer fill (RGB565 constant color). */
+void lcd_ref_fill_buf(uint16_t* buf, int stride,
+                      int w, int h, uint16_t color);
+
 #ifdef __cplusplus
 }
 #endif

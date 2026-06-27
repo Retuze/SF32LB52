@@ -124,41 +124,47 @@ lcd_push_pixels_ram(HPSYS_GPIO_TypeDef *gpio, const uint16_t *src,
                     uint32_t d0_mask, uint32_t d1_mask,
                     uint32_t d2_mask, uint32_t d3_mask, uint32_t data_mask)
 {
+    // 16-entry lookup table: nibble → {set_mask, clr_mask}
+    uint32_t nib_set[16], nib_clr[16];
+    for (uint32_t n = 0U; n < 16U; ++n) {
+        uint32_t s = 0U;
+        if (n & 1U) s |= d0_mask;
+        if (n & 2U) s |= d1_mask;
+        if (n & 4U) s |= d2_mask;
+        if (n & 8U) s |= d3_mask;
+        nib_set[n] = s;
+        nib_clr[n] = (data_mask & ~s) | clk_mask;
+    }
+
     for (uint32_t i = 0U; i < pixel_count; ++i) {
-        uint16_t c   = src[i];
-        uint8_t  hi  = (uint8_t)(c >> 8);
-        uint8_t  lo  = (uint8_t)(c & 0xFFU);
-        uint32_t hb_hi_set = ((hi & 0x10U) ? d0_mask : 0U)
-                           | ((hi & 0x20U) ? d1_mask : 0U)
-                           | ((hi & 0x40U) ? d2_mask : 0U)
-                           | ((hi & 0x80U) ? d3_mask : 0U);
-        uint32_t hb_lo_set = ((hi & 0x01U) ? d0_mask : 0U)
-                           | ((hi & 0x02U) ? d1_mask : 0U)
-                           | ((hi & 0x04U) ? d2_mask : 0U)
-                           | ((hi & 0x08U) ? d3_mask : 0U);
-        uint32_t lb_hi_set = ((lo & 0x10U) ? d0_mask : 0U)
-                           | ((lo & 0x20U) ? d1_mask : 0U)
-                           | ((lo & 0x40U) ? d2_mask : 0U)
-                           | ((lo & 0x80U) ? d3_mask : 0U);
-        uint32_t lb_lo_set = ((lo & 0x01U) ? d0_mask : 0U)
-                           | ((lo & 0x02U) ? d1_mask : 0U)
-                           | ((lo & 0x04U) ? d2_mask : 0U)
-                           | ((lo & 0x08U) ? d3_mask : 0U);
+        uint16_t c  = src[i];
+        uint8_t  hi = (uint8_t)(c >> 8);
+        uint8_t  lo = (uint8_t)(c & 0xFFU);
 
-        gpio->DOCR0.R = (data_mask & ~hb_hi_set) | clk_mask;
-        gpio->DOSR0.R = hb_hi_set;
+        uint32_t s, clr;
+
+        s   = nib_set[hi >> 4];
+        clr = nib_clr[hi >> 4];
+        gpio->DOCR0.R = clr;
+        gpio->DOSR0.R = s;
         gpio->DOSR0.R = clk_mask;
 
-        gpio->DOCR0.R = (data_mask & ~hb_lo_set) | clk_mask;
-        gpio->DOSR0.R = hb_lo_set;
+        s   = nib_set[hi & 0xFU];
+        clr = nib_clr[hi & 0xFU];
+        gpio->DOCR0.R = clr;
+        gpio->DOSR0.R = s;
         gpio->DOSR0.R = clk_mask;
 
-        gpio->DOCR0.R = (data_mask & ~lb_hi_set) | clk_mask;
-        gpio->DOSR0.R = lb_hi_set;
+        s   = nib_set[lo >> 4];
+        clr = nib_clr[lo >> 4];
+        gpio->DOCR0.R = clr;
+        gpio->DOSR0.R = s;
         gpio->DOSR0.R = clk_mask;
 
-        gpio->DOCR0.R = (data_mask & ~lb_lo_set) | clk_mask;
-        gpio->DOSR0.R = lb_lo_set;
+        s   = nib_set[lo & 0xFU];
+        clr = nib_clr[lo & 0xFU];
+        gpio->DOCR0.R = clr;
+        gpio->DOSR0.R = s;
         gpio->DOSR0.R = clk_mask;
     }
     gpio->DOCR0.R = clk_mask;
@@ -418,4 +424,17 @@ void lcd_ref_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                             d2_mask, d3_mask, data_mask);
     }
     qspi_cmd_end();
+}
+
+/** RAM-based buffer fill — runs from RAM to avoid Flash wait states. */
+SF32_RAMFUNC __attribute__((noinline))
+void lcd_ref_fill_buf(uint16_t* buf, int stride,
+                      int w, int h, uint16_t color)
+{
+    for (int ty = 0; ty < h; ty++) {
+        for (int tx = 0; tx < w; tx++) {
+            buf[tx] = color;
+        }
+        buf += stride;
+    }
 }

@@ -88,3 +88,10 @@ int close(int fd)
     (void)fd;
     return 0;
 }
+
+void _exit(int status)
+{
+    (void)status;
+    while (1) {
+    }
+}
