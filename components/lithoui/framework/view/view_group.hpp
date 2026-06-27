@@ -32,11 +32,19 @@ public:
     void onDraw(Painter& p) override {
         View::onDraw(p);
 
+        // Pre-compute parent alpha once (stays constant across children)
+        uint8_t pa = p.alpha();
+
+        uint8_t ti = p.tileIdx();
+
         for (uint16_t i = 0; i < mChildCount; i++) {
             View* child = mChildren[i];
             if (!child || !child->visible()) continue;
 
-            // transformedBounds bundles translation + rotation in one rect
+            // Tile mask quick reject: if mask set & tile not covered, skip
+            uint16_t mask = child->tileMask();
+            if (mask && !((mask >> ti) & 1)) continue;
+
             Region tb = child->transformedBounds();
 
             int sx = p.screenX() + tb.x;
@@ -46,11 +54,17 @@ public:
 
             if (!p.intersectsClip(sx, sy, sr, sb)) continue;
 
-            Painter cp = p;
-            cp.setScreenOrigin(sx, sy);
-            cp.setScreenClip(sx, sy, sr, sb);
-            cp.setAlpha((uint8_t)((uint32_t)p.alpha() * child->alpha() / 255));
-            child->onDraw(cp);
+            uint8_t ca = child->alpha();
+            if (ca == 255 && pa == 255 && tb.x == 0 && tb.y == 0) {
+                // Child at (0,0), no alpha → reuse parent painter directly
+                child->onDraw(p);
+            } else {
+                Painter cp = p;
+                cp.setScreenOrigin(sx, sy);
+                cp.setScreenClip(sx, sy, sr, sb);
+                cp.setAlpha((uint8_t)((uint32_t)pa * ca / 255));
+                child->onDraw(cp);
+            }
         }
     }
 

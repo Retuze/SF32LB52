@@ -4,6 +4,9 @@
 #include "painter.hpp"
 #include <stdint.h>
 #include <stdio.h>
+#ifndef DWT_CYCCNT
+#define DWT_CYCCNT (*(volatile uint32_t*)0xE0001004UL)
+#endif
 
 namespace litho {
 
@@ -56,6 +59,15 @@ public:
     int cols()   const { return mCols; }
     int rows()   const { return mRows; }
 
+    // Per-frame stats
+    void clearStats()  { mStatDraw=0; mStatSetup=0; mStatXfer=0; mStatTiles=0; }
+    uint32_t statDraw()  const { return mStatDraw; }
+    uint32_t statSetup() const { return mStatSetup; }
+    uint32_t statXfer()  const { return mStatXfer; }
+    uint32_t statTiles() const { return mStatTiles; }
+    uint32_t tileDraw(int i) const { return (i < mStatTiles) ? mTileDraw[i] : 0; }
+    uint32_t tileXfer(int i) const { return (i < mStatTiles) ? mTileXfer[i] : 0; }
+
     // Iterate the blocks covering a screen region. For each block:
     //   1. Acquire a tile from the pool
     //   2. Configure the Painter (tile, screen origin, block-sized clip)
@@ -83,16 +95,34 @@ public:
                 int bw = blockActualW(col);
                 int bh = blockActualH(row);
 
+                uint32_t ts0 = DWT_CYCCNT;
                 Tile& tile = acquireTile();
-
+                // Clear tile (32-bit memset, replaces BgView fillRect)
+                {
+                    uint32_t* p = (uint32_t*)tile.buffer();
+                    uint32_t w = (uint32_t)(tile.width() * tile.height()) / 2;
+                    for (uint32_t i = 0; i < w; i++) p[i] = 0;
+                }
                 painter.setTile(tile, bx, by);
                 painter.setScreenOrigin(0, 0);
                 painter.setScreenClip(bx, by, bx + bw, by + bh);
+                uint32_t ts1 = DWT_CYCCNT;
 
+                painter.setTileIdx((uint8_t)row);
                 draw(painter, bx, by, bw, bh);
+                uint32_t ts2 = DWT_CYCCNT;
 
                 display.bitblt(tile.buffer(), bx, by, bw, bh);
+                uint32_t ts3 = DWT_CYCCNT;
+
                 releaseTile(tile);
+
+                int ti = mStatTiles;
+                if (ti < 9) { mTileDraw[ti] = ts2 - ts1; mTileXfer[ti] = ts3 - ts2; }
+                mStatSetup += ts1 - ts0;
+                mStatDraw  += ts2 - ts1;
+                mStatXfer  += ts3 - ts2;
+                mStatTiles++;
             }
         }
     }
@@ -138,6 +168,13 @@ private:
     uint16_t* mPoolBufs  = nullptr;
     int*      mFreeList  = nullptr;
     int       mFreeCount = 0;
+
+    uint32_t  mStatSetup = 0;
+    uint32_t  mStatDraw  = 0;
+    uint32_t  mStatXfer  = 0;
+    uint32_t  mStatTiles = 0;
+    uint32_t  mTileDraw[9] = {};
+    uint32_t  mTileXfer[9] = {};
 };
 
 } // namespace litho

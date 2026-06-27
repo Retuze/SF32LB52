@@ -61,6 +61,10 @@ public:
     // Propagate dirty list to view tree (replaces dynamic_cast on ViewGroup).
     virtual void propagateDirtyList(DirtyList* dl) { mDirtyList = dl; }
 
+    // Tile mask: bit i set = this view covers tile row i. 0 = unset (draw always).
+    void     setTileMask(uint16_t m) { mTileMask = m; }
+    uint16_t tileMask()        const { return mTileMask; }
+
     // Touch dispatch. Default: no children, just call onTouchEvent.
     virtual bool dispatchTouchEvent(TouchEvent& ev, int screenX, int screenY);
 
@@ -77,6 +81,7 @@ protected:
     uint8_t      mAlpha         = 255;
     ViewGroup*   mParent        = nullptr;
     DirtyList*   mDirtyList     = nullptr;
+    uint16_t     mTileMask      = 0;  // 0=draw always, bit i=covered
 
 private:
     ViewPropertyAnimator* mAnimator = nullptr;

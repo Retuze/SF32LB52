@@ -3,6 +3,18 @@
 #include "core/pfb.hpp"
 #include "core/dirty_list.hpp"
 #include "framework/animation/animation_manager.hpp"
+#include <stdint.h>
+#include <stdio.h>
+
+extern "C" {
+void lcd_ref_fill_buf(uint16_t* buf, int stride,
+                      int w, int h, uint16_t color);
+}
+
+// DWT cycle counter (Cortex-M33, same as SF32LB52.h)
+#ifndef DWT_CYCCNT
+#define DWT_CYCCNT (*(volatile uint32_t*)0xE0001004UL)
+#endif
 #include "port/display_adapter.hpp"
 #include "port/input_adapter.hpp"
 #include "port/tick_adapter.hpp"
@@ -60,7 +72,8 @@ public:
         mAnimMgr.tick(frameTimeMs);
 
         // Render each dirty region through PFB
-        uint32_t renderStart = mTick.tickMs();
+        mPFB.clearStats();
+        uint32_t frameCycles = DWT_CYCCNT;
         for (int ri = 0; ri < mDirtyList.count(); ri++) {
             const Region& r = mDirtyList.regions()[ri];
 
@@ -76,19 +89,24 @@ public:
         mDirtyList.clear();
         if (drew) {
             mDisplay.flush();
-            // ── FPS / render-time stats (printed once per second) ──
-            mFpsRenderMs += (mTick.tickMs() - renderStart);
-            mFpsFrames++;
-            if (mFpsT0 == 0) mFpsT0 = frameTimeMs;
-            uint32_t elapsed = frameTimeMs - mFpsT0;
-            if (elapsed >= 1000) {
-                double fps   = mFpsFrames * 1000.0 / elapsed;
-                double avgMs = mFpsFrames ? (double)mFpsRenderMs / mFpsFrames : 0.0;
-                printf("FPS: %.1f  (%d frames in %u ms, avg %.1f ms/frame render)\n",
-                       fps, mFpsFrames, elapsed, avgMs);
-                fflush(stdout);
-                mFpsT0 = frameTimeMs; mFpsFrames = 0; mFpsRenderMs = 0;
+            // Per-frame breakdown: setup(PFB) / draw(views) / xfer(bitblt)
+            uint32_t setupUs = mPFB.statSetup() / 240UL;
+            uint32_t drawUs  = mPFB.statDraw()  / 240UL;
+            uint32_t xferUs  = mPFB.statXfer()  / 240UL;
+            uint32_t totalUs = (DWT_CYCCNT - frameCycles) / 240UL;
+            uint32_t tiles   = mPFB.statTiles();
+            printf("[fr %u] %lu us  setup=%lu draw=%lu xfer=%lu tiles=%lu\n",
+                   (unsigned)mFrameCount++,
+                   (unsigned long)totalUs,
+                   (unsigned long)setupUs, (unsigned long)drawUs,
+                   (unsigned long)xferUs, (unsigned long)tiles);
+            // Per-tile draw times
+            printf("  tile: ");
+            for (uint32_t ti = 0; ti < tiles && ti < 9; ti++) {
+                printf("%lu ", (unsigned long)(mPFB.tileDraw(ti) / 240UL));
             }
+            printf("us\n");
+            fflush(stdout);
         }
         return true;
     }
@@ -118,11 +136,7 @@ private:
     Window*   mWindows[4] = {};
     uint16_t  mCount      = 0;
     bool      mRunning    = false;
-
-    // FPS / render-time stats (see runOnce)
-    uint32_t  mFpsT0       = 0;
-    uint32_t  mFpsFrames   = 0;
-    uint32_t  mFpsRenderMs = 0;
+    uint32_t  mFrameCount = 0;
 };
 
 } // namespace litho
