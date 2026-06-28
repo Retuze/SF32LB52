@@ -31,7 +31,7 @@ static const uint16_t flashData[SRAM_BUF_SIZE] __attribute__((aligned(4))) = {
  * 32-bit word copy, identical code except for section placement.
  * ========================================================================= */
 
-static SF32_RAMFUNC __attribute__((noinline))
+static RAMFUNC __attribute__((noinline))
 void copy_words_ram(uint32_t* dst, const uint32_t* src, uint32_t words) {
     for (uint32_t i = 0; i < words; i++) dst[i] = src[i];
 }
@@ -143,7 +143,7 @@ struct MPU_Regs {
  * attributes (MPU + caches) — executing from Flash while changing how Flash
  * is accessed causes an IACCVIOL fault.
  */
-static SF32_RAMFUNC __attribute__((noinline))
+static RAMFUNC __attribute__((noinline))
 void enable_flash_cache_prefetch(void)
 {
     uint32_t i;
@@ -204,13 +204,13 @@ void enable_flash_cache_prefetch(void)
  * and reveals the true per-store issue rate (the write buffer hides the bus
  * latency, so back-to-back stores issue ~1 cycle each).
  * ───────────────────────────────────────────────────────────────────────── */
-SF32_RAMFUNC __attribute__((noinline))
+RAMFUNC __attribute__((noinline))
 static uint32_t gpio_store_loop(volatile uint32_t* reg, uint32_t v, uint32_t iters) {
     uint32_t t0 = DWT_CYCCNT;
     for (uint32_t i = 0; i < iters; i++) *reg = v;
     return DWT_CYCCNT - t0;
 }
-SF32_RAMFUNC __attribute__((noinline))
+RAMFUNC __attribute__((noinline))
 static uint32_t gpio_pixel12_loop(HPSYS_GPIO_TypeDef* g, uint32_t m, uint32_t px) {
     uint32_t t0 = DWT_CYCCNT;
     for (uint32_t i = 0; i < px; i++) {
@@ -246,7 +246,7 @@ int main(void)
 {
     printf("\r\n[bench] Copy speed test\r\n");
     printf("[bench] HCLK=%lu Hz  PSCLR=%lu\r\n",
-           (unsigned long)rcc_get_system_hz(),
+           (unsigned long)clk_get_hz(),
            (unsigned long)(*(volatile uint32_t*)0x5004200CUL));
     print_flash_diag();
 
@@ -264,7 +264,7 @@ int main(void)
                copy_words_ram, (const uint32_t*)sramBuf, (uint32_t*)sramBuf2);
 
     // --- Cached pass (MPU cacheable + MPI2 prefetch) ---
-    enable_flash_cache_prefetch();
+    cache_enable();
     printf("=== Cached + prefetch ===\r\n");
     bench_copy("flash F->S", copyBytes, SEQ_REPS,
                copy_words_flash, (const uint32_t*)flashData, (uint32_t*)sramBuf2);

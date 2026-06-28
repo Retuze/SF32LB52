@@ -11,7 +11,7 @@
 extern "C" {
 #include "hal.h"
 #include "board.h"
-#include "lcd_ref.h"
+#include "lcd.h"
 }
 
 #include "core/litho_core.h"
@@ -31,8 +31,8 @@ extern "C" {
 
 using namespace litho;
 
-static const int kScreenW = LCD_WIDTH_REF;
-static const int kScreenH = LCD_HEIGHT_REF;
+static const int kScreenW = LCD_WIDTH;
+static const int kScreenH = LCD_HEIGHT;
 
 class GalleryActivity : public Activity {
 public:
@@ -68,19 +68,16 @@ public:
     }
 };
 
-extern "C" {
-void enable_flash_cache_prefetch(void);
-}
-
 extern "C" int main()
 {
     printf("\r\n[litho] Gallery\r\n");
-    rcc_set_system_hz(240000000UL);
+    clk_set_hz(HCLK_240MHZ);
 
-    enable_flash_cache_prefetch();
-    printf("[litho] I+D Cache + MPI2 prefetch ON\r\n");
-
-    lcd_ref_init();
+    lcd_set_bus(&lcd_bus_qspi);
+    lcd_set_ic(&lcd_ic_co5300);
+    lcd_set_geometry(LCD_WIDTH, LCD_HEIGHT);
+    lcd_set_pins(LCD_RST, LCD_BL);
+    lcd_init();
 
     SF32Display display;
     display.init(kScreenW, kScreenH);

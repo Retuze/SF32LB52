@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include "hal.h"
-#include "hal_uart.h"
 
 static volatile uint32_t _tick_ms = 0;
 
@@ -38,7 +37,7 @@ ssize_t write(int fd, const void *buf, size_t count)
     (void)fd;
     const char *p = (const char *)buf;
     for (size_t i = 0U; i < count; i++) {
-        uart_write_byte((uint8_t)p[i]);
+        uart_putc((uint8_t)p[i]);
     }
     return (ssize_t)count;
 }

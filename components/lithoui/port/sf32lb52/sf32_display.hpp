@@ -4,7 +4,7 @@
 #include "hal.h"  // DWT_CYCCNT
 
 extern "C" {
-void lcd_ref_bitblt(uint16_t x, uint16_t y,
+void lcd_bitblt(uint16_t x, uint16_t y,
                     uint16_t w, uint16_t h,
                     const uint16_t* rgb565);
 }
@@ -22,7 +22,7 @@ public:
     void bitblt(const uint16_t* data, int x, int y, int w, int h) override {
         if (!data || w <= 0 || h <= 0) return;
         uint32_t t0 = DWT_CYCCNT;
-        lcd_ref_bitblt((uint16_t)x, (uint16_t)y,
+        lcd_bitblt((uint16_t)x, (uint16_t)y,
                        (uint16_t)w, (uint16_t)h, data);
         mTransferCycles += DWT_CYCCNT - t0;
     }

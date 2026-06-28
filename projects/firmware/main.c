@@ -9,22 +9,12 @@
 #include <stdint.h>
 #include "hal.h"
 #include "board.h"
-#include "lcd_ref.h"
-
-#define USART_ISR_TXE  (1UL << 7)
-#define USART_ISR_TC   (1UL << 6)
-
-/* ---- Polled UART (same as bootloader, uses ROM's USART1 config) -------- */
-static void uart_putc(char c)
-{
-    while ((USART1->ISR & USART_ISR_TXE) == 0U) {}
-    USART1->TDR = (uint8_t)c;
-}
+#include "lcd.h"
 
 static void uart_puts(const char *s)
 {
     while (*s) { uart_putc(*s++); }
-    while ((USART1->ISR & USART_ISR_TC) == 0U) {}
+    uart_flush();
 }
 
 static void uart_print_hex(unsigned long v)
@@ -53,7 +43,7 @@ int main(void)
     uart_puts("\r\n[firmware] entered main\r\n");
 
     /* ---- Set system clock to 240 MHz ---- */
-    rcc_set_system_hz(240000000UL);
+    clk_set_hz(HCLK_240MHZ);
     uart_puts("[firmware] clock set to 240 MHz\r\n");
 
     /* ---- Init onboard LED ---- */
@@ -64,17 +54,21 @@ int main(void)
 
     uart_puts("[firmware] Watch V1.0 booted\r\n");
 
-    /* ---- LCD init (reference port, same as lcd_test) ---- */
+    /* ---- LCD init ---- */
     uart_puts("[firmware] LCD init...\r\n");
-    lcd_ref_init();
+    lcd_set_bus(&lcd_bus_qspi);
+    lcd_set_ic(&lcd_ic_co5300);
+    lcd_set_geometry(LCD_WIDTH, LCD_HEIGHT);
+    lcd_set_pins(LCD_RST, LCD_BL);
+    lcd_init();
     uart_puts("[firmware] LCD init done\r\n");
 
     /* ---- Main loop: flash black/white ---- */
     uart_puts("[firmware] Entering main loop\r\n");
     while (1) {
         start_cyc = DWT_CYCCNT;
-        lcd_ref_fill_rect(0U, 0U,
-                          LCD_WIDTH_REF - 1U, LCD_HEIGHT_REF - 1U,
+        lcd_fill_rect(0U, 0U,
+                          LCD_WIDTH - 1U, LCD_HEIGHT - 1U,
                           color);
         elapsed_us = (DWT_CYCCNT - start_cyc) / 240UL;  /* 240 cycles/us at 240 MHz */
         uart_puts("fill: ");

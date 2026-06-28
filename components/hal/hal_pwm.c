@@ -15,10 +15,10 @@ typedef struct {
 static uint32_t s_frequency_hz = PWM_DEFAULT_FREQUENCY_HZ;
 static uint8_t s_resolution_bits = PWM_DEFAULT_RESOLUTION;
 static pwm_pin_binding_t s_bindings[4] = {
-    {36U, SF32_ATIM_CHANNEL_1, 0U},
-    {37U, SF32_ATIM_CHANNEL_2, 0U},
-    {38U, SF32_ATIM_CHANNEL_3, 0U},
-    {39U, SF32_ATIM_CHANNEL_4, 0U},
+    {36U, ATIM_CH1, 0U},
+    {37U, ATIM_CH2, 0U},
+    {38U, ATIM_CH3, 0U},
+    {39U, ATIM_CH4, 0U},
 };
 
 static pwm_pin_binding_t *pwm_find_binding(uint32_t pin)
@@ -65,12 +65,12 @@ void analogWriteResolution(uint8_t bits)
     s_resolution_bits = bits;
 }
 
-int pwmAttachPinToAtim(uint32_t pin, uint8_t channel)
+int pwmAttachPin(uint32_t pin, uint8_t channel)
 {
     pwm_pin_binding_t *binding;
 
-    if ((channel < SF32_ATIM_CHANNEL_1) || (channel > SF32_ATIM_CHANNEL_4)) {
-        return SF32_ATIM_ERR_BAD_CHANNEL;
+    if ((channel < ATIM_CH1) || (channel > ATIM_CH4)) {
+        return -1;
     }
 
     binding = pwm_find_binding(pin);
@@ -78,14 +78,14 @@ int pwmAttachPinToAtim(uint32_t pin, uint8_t channel)
         binding = pwm_find_channel_binding(channel);
     }
     if (binding == 0) {
-        return SF32_ATIM_ERR_BAD_ARGUMENT;
+        return -2;
     }
 
     binding->pin = pin;
     binding->channel = channel;
     binding->attached = 0U;
 
-    return SF32_ATIM_OK;
+    return 0;
 }
 
 int analogWrite(uint32_t pin, uint32_t value)
@@ -97,19 +97,19 @@ int analogWrite(uint32_t pin, uint32_t value)
     int ret;
 
     if (binding == 0) {
-        return SF32_ATIM_ERR_BAD_ARGUMENT;
+        return -2;
     }
 
     if (binding->attached == 0U) {
-        ret = sf32lb52_atim_pwm_attach_pin(pin, binding->channel);
-        if (ret != SF32_ATIM_OK) {
+        ret = atim_pwm_pin(pin, binding->channel);
+        if (ret != 0) {
             return ret;
         }
         binding->attached = 1U;
     }
 
-    ret = sf32lb52_atim_pwm_configure(binding->channel, s_frequency_hz);
-    if (ret != SF32_ATIM_OK) {
+    ret = atim_pwm_init(binding->channel, s_frequency_hz);
+    if (ret != 0) {
         return ret;
     }
 
@@ -118,8 +118,8 @@ int analogWrite(uint32_t pin, uint32_t value)
         value = max_value;
     }
 
-    period_ticks = sf32lb52_atim_pwm_get_period_ticks();
+    period_ticks = atim_pwm_period();
     pulse_ticks = (uint32_t)(((uint64_t)value * period_ticks) / max_value);
 
-    return sf32lb52_atim_pwm_write_raw(binding->channel, pulse_ticks);
+    return atim_pwm_write(binding->channel, pulse_ticks);
 }

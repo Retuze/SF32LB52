@@ -5,7 +5,7 @@ add_executable(firmware
     startup.c
     system.c
     ${PLATFORM_DIR}/board.c
-    ${PLATFORM_DIR}/lcd_ref.c
+
 )
 
 target_include_directories(firmware PRIVATE

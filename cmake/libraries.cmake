@@ -53,7 +53,7 @@ sdk_register_library(hal
 sdk_register_library(bsp
     "${CMAKE_SOURCE_DIR}/components/bsp"
     TARGETS bsp
-    DEPENDS hal
+    DEPENDS hal picolibc
 )
 
 # --- Utilities (log, ring buffer, bit-bang, CRC, etc.) -----------------

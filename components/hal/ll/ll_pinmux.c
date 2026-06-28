@@ -1,27 +1,27 @@
-#include "ll_pinmux.h"
+/**
+ * @file pinmux.c
+ * @brief Pad configuration — function select, pull, drive, input mode.
+ */
 
+#include "ll_pinmux.h"
 #include "SF32LB52.h"
 
-void sf32lb52_pinmux_enable_clock(void)
+void pinmux_clk_enable(void)
 {
     HPSYS_RCC->ENR1.R |= HPSYS_RCC_ENR1_PINMUX1_Msk;
     HPSYS_RCC->ESR1.R |= HPSYS_RCC_ESR1_PINMUX1_Msk;
 }
 
-void sf32lb52_pinmux_config_pad(uint32_t pad, uint32_t fsel, uint32_t flags)
+void pinmux_config(uint32_t pad, uint32_t fsel, uint32_t flags)
 {
-    uint32_t cfg;
+    if (pad >= HPSYS_PINMUX_PAD_COUNT) return;
 
-    if (pad >= HPSYS_PINMUX_PAD_COUNT) {
-        return;
-    }
+    pinmux_clk_enable();
 
-    sf32lb52_pinmux_enable_clock();
-
-    cfg = flags & (SF32_PINMUX_PULL_ENABLE | SF32_PINMUX_PULL_SELECT_UP |
-                   SF32_PINMUX_INPUT_ENABLE | SF32_PINMUX_INPUT_SCHMITT |
-                   SF32_PINMUX_SLEW_SLOW | SF32_PINMUX_DRIVE_Msk);
-    cfg |= (fsel << SF32_PINMUX_FSEL_Pos) & SF32_PINMUX_FSEL_Msk;
+    uint32_t cfg  = flags & (PINMUX_PULL_ENABLE | PINMUX_PULL_UP_SEL |
+                             PINMUX_INPUT_ENABLE | PINMUX_INPUT_SCHMITT |
+                             PINMUX_SLEW_SLOW | PINMUX_DRIVE_Msk);
+    cfg |= (fsel << PINMUX_FSEL_Pos) & PINMUX_FSEL_Msk;
 
     HPSYS_PINMUX->PAD[pad].R = cfg;
 }

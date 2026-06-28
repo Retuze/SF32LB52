@@ -19,7 +19,7 @@ uint8_t digitalRead(uint32_t pin)              { (void)pin; return 0; }
 void digitalToggle(uint32_t pin)               { (void)pin; }
 
 /* ---- Clock stub ---- */
-void rcc_set_system_hz(uint32_t hz) { (void)hz; }
+void clk_set_hz(uint32_t hz) { (void)hz; }
 
 /* ---- Time stubs (host clock_gettime) ---- */
 static uint32_t _start_ms = 0;

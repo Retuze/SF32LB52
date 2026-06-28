@@ -159,3 +159,21 @@ fail:
     bb_i2c_stop(dev);
     return -1;
 }
+
+/* Bus recovery: 9 SCL pulses while SDA high to release a stuck slave. */
+void bb_i2c_reset(const bb_i2c_t *dev)
+{
+    sda_high(dev);
+    scl_high(dev);
+    half_delay(dev);
+
+    for (uint8_t i = 0U; i < 9U; ++i) {
+        scl_low(dev);
+        half_delay(dev);
+        scl_high(dev);
+        half_delay(dev);
+    }
+
+    /* Send STOP to return bus to idle state */
+    bb_i2c_stop(dev);
+}

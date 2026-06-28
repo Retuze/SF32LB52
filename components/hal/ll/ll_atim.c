@@ -2,7 +2,7 @@
 
 #include "SF32LB52.h"
 #include "ll_pinmux.h"
-#include "ll_rcc.h"
+#include "clock.h"
 
 #define ATIM_PWM_MODE_1       6UL
 #define ATIM_MAX_PERIOD_TICKS 0xFFFFFFFFUL
@@ -12,19 +12,19 @@ static uint32_t s_period_ticks;
 
 static int atim_valid_channel(uint8_t channel)
 {
-    return (channel >= SF32_ATIM_CHANNEL_1) && (channel <= SF32_ATIM_CHANNEL_4);
+    return (channel >= ATIM_CH1) && (channel <= ATIM_CH4);
 }
 
 static volatile uint32_t *atim_ccr(uint8_t channel)
 {
     switch (channel) {
-    case SF32_ATIM_CHANNEL_1:
+    case ATIM_CH1:
         return &ATIM1->CCR1;
-    case SF32_ATIM_CHANNEL_2:
+    case ATIM_CH2:
         return &ATIM1->CCR2;
-    case SF32_ATIM_CHANNEL_3:
+    case ATIM_CH3:
         return &ATIM1->CCR3;
-    case SF32_ATIM_CHANNEL_4:
+    case ATIM_CH4:
     default:
         return &ATIM1->CCR4;
     }
@@ -33,13 +33,13 @@ static volatile uint32_t *atim_ccr(uint8_t channel)
 static uint32_t atim_channel_enable_bit(uint8_t channel)
 {
     switch (channel) {
-    case SF32_ATIM_CHANNEL_1:
+    case ATIM_CH1:
         return ATIM_CCER_CC1E;
-    case SF32_ATIM_CHANNEL_2:
+    case ATIM_CH2:
         return ATIM_CCER_CC2E;
-    case SF32_ATIM_CHANNEL_3:
+    case ATIM_CH3:
         return ATIM_CCER_CC3E;
-    case SF32_ATIM_CHANNEL_4:
+    case ATIM_CH4:
     default:
         return ATIM_CCER_CC4E;
     }
@@ -47,7 +47,7 @@ static uint32_t atim_channel_enable_bit(uint8_t channel)
 
 static void atim_enable_clocks(void)
 {
-    sf32lb52_pinmux_enable_clock();
+    pinmux_clk_enable();
     HPSYS_RCC->ENR2.R |= HPSYS_RCC_ENR2_ATIM1_Msk;
     HPSYS_RCC->ESR2.R |= HPSYS_RCC_ESR2_ATIM1_Msk;
 }
@@ -55,25 +55,25 @@ static void atim_enable_clocks(void)
 static void atim_configure_pwm_channel(uint8_t channel)
 {
     switch (channel) {
-    case SF32_ATIM_CHANNEL_1:
+    case ATIM_CH1:
         MODIFY_REG(ATIM1->CCMR1,
                    ATIM_CCMR1_CC1S_Msk | ATIM_CCMR1_OC1M_Msk,
                    ATIM_CCMR1_OC1PE |
                        (ATIM_PWM_MODE_1 << ATIM_CCMR1_OC1M_Pos));
         break;
-    case SF32_ATIM_CHANNEL_2:
+    case ATIM_CH2:
         MODIFY_REG(ATIM1->CCMR1,
                    ATIM_CCMR1_CC2S_Msk | ATIM_CCMR1_OC2M_Msk,
                    ATIM_CCMR1_OC2PE |
                        (ATIM_PWM_MODE_1 << ATIM_CCMR1_OC2M_Pos));
         break;
-    case SF32_ATIM_CHANNEL_3:
+    case ATIM_CH3:
         MODIFY_REG(ATIM1->CCMR2,
                    ATIM_CCMR2_CC3S_Msk | ATIM_CCMR2_OC3M_Msk,
                    ATIM_CCMR2_OC3PE |
                        (ATIM_PWM_MODE_1 << ATIM_CCMR2_OC3M_Pos));
         break;
-    case SF32_ATIM_CHANNEL_4:
+    case ATIM_CH4:
     default:
         MODIFY_REG(ATIM1->CCMR2,
                    ATIM_CCMR2_CC4S_Msk | ATIM_CCMR2_OC4M_Msk,
@@ -83,24 +83,24 @@ static void atim_configure_pwm_channel(uint8_t channel)
     }
 }
 
-int sf32lb52_atim_pwm_configure(uint8_t channel, uint32_t frequency_hz)
+int atim_pwm_init(uint8_t channel, uint32_t frequency_hz)
 {
     uint32_t timer_hz;
     uint32_t prescaler;
     uint64_t ticks;
 
     if (!atim_valid_channel(channel)) {
-        return SF32_ATIM_ERR_BAD_CHANNEL;
+        return -1;
     }
     if (frequency_hz == 0U) {
-        return SF32_ATIM_ERR_BAD_ARGUMENT;
+        return -2;
     }
 
     atim_enable_clocks();
 
-    timer_hz = rcc_get_system_hz();
+    timer_hz = clk_get_hz();
     if (timer_hz == 0U) {
-        return SF32_ATIM_ERR_CLOCK;
+        return -3;
     }
 
     ticks = timer_hz / frequency_hz;
@@ -132,10 +132,10 @@ int sf32lb52_atim_pwm_configure(uint8_t channel, uint32_t frequency_hz)
     ATIM1->EGR = ATIM_EGR_UG;
     ATIM1->CR1 |= ATIM_CR1_CEN;
 
-    return SF32_ATIM_OK;
+    return 0;
 }
 
-int sf32lb52_atim_pwm_attach_pin(uint32_t pin, uint8_t channel)
+int atim_pwm_pin(uint32_t pin, uint8_t channel)
 {
     static const uint32_t pos[] = {
         HPSYS_CFG_ATIM1_PINR1_CH1_PIN_Pos,
@@ -152,10 +152,10 @@ int sf32lb52_atim_pwm_attach_pin(uint32_t pin, uint8_t channel)
     uint32_t index;
 
     if (!atim_valid_channel(channel)) {
-        return SF32_ATIM_ERR_BAD_CHANNEL;
+        return -1;
     }
     if (pin >= HPSYS_PINMUX_PAD_COUNT) {
-        return SF32_ATIM_ERR_BAD_ARGUMENT;
+        return -2;
     }
 
     atim_enable_clocks();
@@ -163,20 +163,20 @@ int sf32lb52_atim_pwm_attach_pin(uint32_t pin, uint8_t channel)
     index = (uint32_t)channel - 1U;
     MODIFY_REG(HPSYS_CFG->ATIM1_PINR1, mask[index],
                (pin << pos[index]) & mask[index]);
-    sf32lb52_pinmux_config_pad(pin, ATIM_PINMUX_FSEL_TIM,
-                               SF32_PINMUX_PULL_NONE | SF32_PINMUX_DRIVE_3);
+    pinmux_config(pin, ATIM_PINMUX_FSEL_TIM,
+                               PINMUX_PULL_NONE | PINMUX_DRIVE_3);
 
-    return SF32_ATIM_OK;
+    return 0;
 }
 
-int sf32lb52_atim_pwm_write_raw(uint8_t channel, uint32_t pulse_ticks)
+int atim_pwm_write(uint8_t channel, uint32_t pulse_ticks)
 {
     if (!atim_valid_channel(channel)) {
-        return SF32_ATIM_ERR_BAD_CHANNEL;
+        return -1;
     }
 
     if (s_period_ticks == 0U) {
-        return SF32_ATIM_ERR_BAD_ARGUMENT;
+        return -2;
     }
     if (pulse_ticks > s_period_ticks) {
         pulse_ticks = s_period_ticks;
@@ -185,10 +185,10 @@ int sf32lb52_atim_pwm_write_raw(uint8_t channel, uint32_t pulse_ticks)
     *atim_ccr(channel) = (pulse_ticks == 0U) ? 0U : (pulse_ticks - 1U);
     ATIM1->EGR = ATIM_EGR_UG;
 
-    return SF32_ATIM_OK;
+    return 0;
 }
 
-uint32_t sf32lb52_atim_pwm_get_period_ticks(void)
+uint32_t atim_pwm_period(void)
 {
     return s_period_ticks;
 }

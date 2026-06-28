@@ -143,34 +143,50 @@ void Reset_Handler(void)
     }
 }
 
+/* ---- Default handler for unhandled interrupts ---- */
+void def_handler(void)
+{
+    while (1) { __asm volatile("wfi" ::: "memory"); }
+}
+
 /* ---- Weak default handlers (overridable by application) ---- */
-void NMI_Handler(void)        __attribute__((weak, alias("Default_Handler")));
-void HardFault_Handler(void)  __attribute__((weak, alias("Default_Handler")));
-void MemManage_Handler(void)  __attribute__((weak, alias("Default_Handler")));
-void BusFault_Handler(void)   __attribute__((weak, alias("Default_Handler")));
-void UsageFault_Handler(void) __attribute__((weak, alias("Default_Handler")));
-void SVC_Handler(void)        __attribute__((weak, alias("Default_Handler")));
-void DebugMon_Handler(void)   __attribute__((weak, alias("Default_Handler")));
-void PendSV_Handler(void)     __attribute__((weak, alias("Default_Handler")));
+void NMI_Handler(void)             __attribute__((weak, alias("def_handler")));
+void HardFault_Handler(void)       __attribute__((weak, alias("Default_Handler")));
+void MemManage_Handler(void)       __attribute__((weak, alias("def_handler")));
+void BusFault_Handler(void)        __attribute__((weak, alias("def_handler")));
+void UsageFault_Handler(void)      __attribute__((weak, alias("def_handler")));
+void SVC_Handler(void)             __attribute__((weak, alias("def_handler")));
+void DebugMon_Handler(void)        __attribute__((weak, alias("def_handler")));
+void PendSV_Handler(void)          __attribute__((weak, alias("def_handler")));
 extern void SysTick_Handler(void);
 
-/* ---- Vector table (Cortex-M33, 16 system exceptions) ---- */
+/* ---- Peripheral interrupt handlers (weak, overridable) ---- */
+void GPIO1_IRQHandler(void)        __attribute__((weak, alias("def_handler")));
+
+/* ---- Vector table (Cortex-M33, 16 system + 85 peripheral = 101 entries) ---- */
+#define IRQ_VECTORS 85U
+
 __attribute__((section(".isr_vector"), used))
-const uintptr_t g_pfnVectors[] = {
-    (uintptr_t)&__StackTop,         /*  0: Initial MSP */
-    (uintptr_t)Reset_Handler,       /*  1: Reset */
-    (uintptr_t)NMI_Handler,         /*  2: NMI */
-    (uintptr_t)HardFault_Handler,   /*  3: HardFault */
-    (uintptr_t)MemManage_Handler,   /*  4: MemManage */
-    (uintptr_t)BusFault_Handler,    /*  5: BusFault */
-    (uintptr_t)UsageFault_Handler,  /*  6: UsageFault */
-    0U,                             /*  7: (reserved) */
-    0U,                             /*  8: (reserved) */
-    0U,                             /*  9: (reserved) */
-    0U,                             /* 10: (reserved) */
-    (uintptr_t)SVC_Handler,         /* 11: SVCall */
-    (uintptr_t)DebugMon_Handler,    /* 12: DebugMon */
-    0U,                             /* 13: (reserved) */
-    (uintptr_t)PendSV_Handler,      /* 14: PendSV */
-    (uintptr_t)SysTick_Handler,     /* 15: SysTick */
+const uintptr_t g_pfnVectors[16U + IRQ_VECTORS] = {
+    /*  0-15: System exceptions */
+    [(uintptr_t)0]  = (uintptr_t)&__StackTop,
+    [(uintptr_t)1]  = (uintptr_t)Reset_Handler,
+    [(uintptr_t)2]  = (uintptr_t)NMI_Handler,
+    [(uintptr_t)3]  = (uintptr_t)HardFault_Handler,
+    [(uintptr_t)4]  = (uintptr_t)MemManage_Handler,
+    [(uintptr_t)5]  = (uintptr_t)BusFault_Handler,
+    [(uintptr_t)6]  = (uintptr_t)UsageFault_Handler,
+    /*  7-10: reserved, zero */
+    [(uintptr_t)11] = (uintptr_t)SVC_Handler,
+    [(uintptr_t)12] = (uintptr_t)DebugMon_Handler,
+    /* 13: reserved, zero */
+    [(uintptr_t)14] = (uintptr_t)PendSV_Handler,
+    [(uintptr_t)15] = (uintptr_t)SysTick_Handler,
+
+    /* 16-99: Peripheral interrupts — default to def_handler
+     * (GCC/Clang range-designator extension, both compilers support it) */
+    [16 ... 99] = (uintptr_t)def_handler,
+
+    /* Override with real handlers for enabled IRQs */
+    [16U + (uintptr_t)GPIO1_IRQn] = (uintptr_t)GPIO1_IRQHandler,  /* index 100 */
 };

@@ -2,8 +2,6 @@
 
 add_executable(firmware-litho
     main.cpp
-    cache_init.c
-    ${PLATFORM_DIR}/lcd_ref.c
     ${CMAKE_SOURCE_DIR}/projects/firmware/startup.c
     ${CMAKE_SOURCE_DIR}/projects/firmware/system.c
     ${PLATFORM_DIR}/board.c

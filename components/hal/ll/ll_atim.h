@@ -1,6 +1,6 @@
 #pragma once
-#ifndef LL_ATIM_H
-#define LL_ATIM_H
+#ifndef ATIM_H
+#define ATIM_H
 
 #include <stdint.h>
 
@@ -8,25 +8,27 @@
 extern "C" {
 #endif
 
-/* SF32LB52x ATIM1 direct-register PWM support. This is not a common driver. */
+/**
+ * @file atim.h
+ * @brief ATIM1 PWM — configure, attach pin, write duty.
+ *
+ *     atim_pwm_init(ch, hz);
+ *     atim_pwm_pin(pin, ch);
+ *     atim_pwm_write(ch, ticks);
+ */
 
-#define SF32_ATIM_OK                 0
-#define SF32_ATIM_ERR_BAD_CHANNEL   -1
-#define SF32_ATIM_ERR_BAD_ARGUMENT  -2
-#define SF32_ATIM_ERR_CLOCK         -3
+#define ATIM_CH1  1U
+#define ATIM_CH2  2U
+#define ATIM_CH3  3U
+#define ATIM_CH4  4U
 
-#define SF32_ATIM_CHANNEL_1 1U
-#define SF32_ATIM_CHANNEL_2 2U
-#define SF32_ATIM_CHANNEL_3 3U
-#define SF32_ATIM_CHANNEL_4 4U
-
-int sf32lb52_atim_pwm_configure(uint8_t channel, uint32_t frequency_hz);
-int sf32lb52_atim_pwm_attach_pin(uint32_t pin, uint8_t channel);
-int sf32lb52_atim_pwm_write_raw(uint8_t channel, uint32_t pulse_ticks);
-uint32_t sf32lb52_atim_pwm_get_period_ticks(void);
+int      atim_pwm_init(uint8_t channel, uint32_t freq_hz);
+int      atim_pwm_pin(uint32_t pin, uint8_t channel);
+int      atim_pwm_write(uint8_t channel, uint32_t ticks);
+uint32_t atim_pwm_period(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif /* ATIM_H */

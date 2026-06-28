@@ -4,12 +4,21 @@
 
 #include <stdint.h>
 
+/**
+ * @file bb_i2c.h
+ * @brief Bit-banged I2C master (software open-drain emulation).
+ *
+ * Open-drain emulation: SDA high = pinMode(INPUT), SDA low = pinMode(OUTPUT)+digitalWrite(LOW).
+ * The I2C address parameter is always a 7-bit address; this driver shifts it left by 1
+ * and appends the R/W bit internally.
+ */
+
 typedef void (*bb_delay_fn)(void);
 
 typedef struct {
     uint32_t    pin_sda;
     uint32_t    pin_scl;
-    bb_delay_fn half_period;
+    bb_delay_fn half_period;  /* optional: called once per half-bit */
 } bb_i2c_t;
 
 void    bb_i2c_init(const bb_i2c_t *dev);
@@ -22,5 +31,10 @@ int bb_i2c_write(const bb_i2c_t *dev, uint8_t addr, const uint8_t *data, uint16_
 int bb_i2c_read(const bb_i2c_t *dev, uint8_t addr, uint8_t *data, uint16_t len);
 int bb_i2c_mem_write(const bb_i2c_t *dev, uint8_t addr, uint8_t reg, const uint8_t *data, uint16_t len);
 int bb_i2c_mem_read(const bb_i2c_t *dev, uint8_t addr, uint8_t reg, uint8_t *data, uint16_t len);
+
+/**
+ * @brief Pulse SCL 9 times with SDA high to recover a stuck bus (slave holds SDA low).
+ */
+void bb_i2c_reset(const bb_i2c_t *dev);
 
 #endif

@@ -8,11 +8,19 @@
 extern "C" {
 #endif
 
-void sf32lb52_uart1_write_byte(uint8_t value);
-void sf32lb52_uart1_wait_tc(void);
+/**
+ * @file ll_uart.h
+ * @brief USART1 polled driver — putc + flush.
+ *
+ * No init needed: the ROM bootloader already configures USART1
+ * (TX=pad19/PA06, RX=pad18/PA05, 1 Mbps).
+ */
+
+void uart_putc(uint8_t c);
+void uart_flush(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif
+#endif /* LL_UART_H */

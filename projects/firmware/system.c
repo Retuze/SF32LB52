@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include "hal.h"
-#include "hal_uart.h"
 
 extern const uintptr_t g_pfnVectors[];
 
@@ -26,7 +25,7 @@ void SystemInit(void)
 
     /* SysTick: 1 ms tick from the current HCLK. */
     _tick_ms = 0U;
-    systick_hz = rcc_get_system_hz();
+    systick_hz = clk_get_hz();
     if (systick_hz == 0U) {
         systick_hz = 240000000UL;
     }
@@ -62,7 +61,7 @@ ssize_t write(int fd, const void *buf, size_t count)
     (void)fd;
     const char *p = (const char *)buf;
     for (size_t i = 0U; i < count; i++) {
-        sf32lb52_uart1_write_byte((uint8_t)p[i]);
+        uart_putc((uint8_t)p[i]);
     }
     return (ssize_t)count;
 }

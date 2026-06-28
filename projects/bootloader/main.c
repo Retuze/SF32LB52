@@ -12,20 +12,10 @@ extern uint32_t APPLICATION_ADDR;
 
 typedef void (*app_entry_t)(void);
 
-/* ---- Direct UART TX (no init — ROM bootloader already configured USART1) */
-#define USART_ISR_TXE  (1UL << 7)
-#define USART_ISR_TC   (1UL << 6)
-
-static void uart_putc(char c)
-{
-    while ((USART1->ISR & USART_ISR_TXE) == 0U) {}
-    USART1->TDR = (uint8_t)c;
-}
-
 static void uart_puts(const char *s)
 {
     while (*s) { uart_putc(*s++); }
-    while ((USART1->ISR & USART_ISR_TC) == 0U) {}
+    uart_flush();
 }
 
 static void uart_put_hex32(uint32_t v)
@@ -90,19 +80,20 @@ int main(void)
 
     /* Step 2: Init clock to 240 MHz */
     uart_puts("[BOOT] Setting clock to 240MHz...\r\n");
-    rcc_set_system_hz(240000000UL);
+    clk_set_hz(HCLK_240MHZ);
 
     dump_words("[BOOT] app before init:", (const uint32_t *)(uintptr_t)&APPLICATION_ADDR, 4);
 
-    /* Step 2.5: Enable DLL2 + configure MPI2 Flash for quad QSPI at 48MHz.
-     * Must run from RAM — modifying MPI2 while executing from Flash = crash. */
+    /* Step 2.5: Enable DLL2 + configure MPI2 Flash for quad QSPI (RAM-resident). */
     uart_puts("[BOOT] Configuring Flash Quad QSPI...\r\n");
-    {
-        extern void boot_flash_quad_init(void);
-        boot_flash_quad_init();
-    }
+    flash_quad_init();
     dump_words("[BOOT] app after init:", (const uint32_t *)(uintptr_t)&APPLICATION_ADDR, 4);
     uart_puts("[BOOT] Flash Quad QSPI ready\r\n");
+
+    /* Step 3: Enable I+D Cache + MPI2 prefetch */
+    uart_puts("[BOOT] Enabling cache + prefetch...\r\n");
+    cache_enable();
+    uart_puts("[BOOT] Cache enabled\r\n");
 
     /* Step 4: Init LED */
     pinMode(LED_RED, OUTPUT);

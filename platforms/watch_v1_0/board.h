@@ -28,9 +28,6 @@
 #define LCD_WIDTH  390
 #define LCD_HEIGHT 450
 
-typedef struct lcd_device lcd_device_t;
-extern lcd_device_t lcd0;
-
 /* ==========================================================================
  * Touch panel (I2C)
  * ========================================================================== */

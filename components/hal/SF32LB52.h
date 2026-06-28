@@ -410,9 +410,26 @@ typedef struct {
 #define SCB_DEMCR_TRCENA    (1UL << 24)
 #define DWT_CTRL_CYCCNTENA  (1UL << 0)
 
-#ifndef SF32_RAMFUNC
-#define SF32_RAMFUNC __attribute__((section(".ramfunc")))
+#ifndef RAMFUNC
+#define RAMFUNC __attribute__((section(".ramfunc")))
 #endif
+
+/* ── NVIC IRQ numbers (peripheral, base=16 for Cortex-M33) ───────────── */
+
+enum {
+    GPIO2_IRQn   = 20,
+    GPIO1_IRQn   = 84,  /* pins 0-63, bank0=0-31, bank1=32-63 */
+    QSPI1_IRQn   = 85,
+    QSPI2_IRQn   = 86,
+    USART1_IRQn  = 59,
+    USART2_IRQn  = 74,
+    USART3_IRQn  = 95,
+    I2C1_IRQn    = 61,
+    I2C2_IRQn    = 76,
+    I2C3_IRQn    = 93,
+    I2C4_IRQn    = 78,
+    ATIM1_IRQn   = 94,
+};
 
 #ifdef __cplusplus
 }

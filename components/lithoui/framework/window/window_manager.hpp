@@ -6,11 +6,6 @@
 #include <stdint.h>
 #include <stdio.h>
 
-extern "C" {
-void lcd_ref_fill_buf(uint16_t* buf, int stride,
-                      int w, int h, uint16_t color);
-}
-
 // DWT cycle counter (Cortex-M33, same as SF32LB52.h)
 #ifndef DWT_CYCCNT
 #define DWT_CYCCNT (*(volatile uint32_t*)0xE0001004UL)
