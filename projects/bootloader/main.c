@@ -90,12 +90,7 @@ int main(void)
     dump_words("[BOOT] app after init:", (const uint32_t *)(uintptr_t)&APPLICATION_ADDR, 4);
     uart_puts("[BOOT] Flash Quad QSPI ready\r\n");
 
-    /* Step 3: Enable I+D Cache + MPI2 prefetch */
-    uart_puts("[BOOT] Enabling cache + prefetch...\r\n");
-    cache_enable();
-    uart_puts("[BOOT] Cache enabled\r\n");
-
-    /* Step 4: Init LED */
+    /* Step 3: Init LED */
     pinMode(LED_RED, OUTPUT);
     digitalWrite(LED_RED, HIGH);
 

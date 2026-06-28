@@ -33,8 +33,15 @@ int bb_i2c_mem_write(const bb_i2c_t *dev, uint8_t addr, uint8_t reg, const uint8
 int bb_i2c_mem_read(const bb_i2c_t *dev, uint8_t addr, uint8_t reg, uint8_t *data, uint16_t len);
 
 /**
- * @brief Pulse SCL 9 times with SDA high to recover a stuck bus (slave holds SDA low).
+ * @brief Pulse SCL 9 times with SDA high to recover a stuck bus.
  */
 void bb_i2c_reset(const bb_i2c_t *dev);
+
+/**
+ * @brief Scan 7-bit addresses [1..127], call callback for each ACK.
+ * @param cb  Called as cb(addr, user) for each responding device.
+ */
+typedef void (*bb_i2c_scan_cb)(uint8_t addr, void *user);
+void bb_i2c_scan(const bb_i2c_t *dev, bb_i2c_scan_cb cb, void *user);
 
 #endif

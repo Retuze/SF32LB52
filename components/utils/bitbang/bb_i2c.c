@@ -177,3 +177,15 @@ void bb_i2c_reset(const bb_i2c_t *dev)
     /* Send STOP to return bus to idle state */
     bb_i2c_stop(dev);
 }
+
+/* Scan 7-bit addresses [1..127].  If cb is NULL, prints found devices to stdout. */
+void bb_i2c_scan(const bb_i2c_t *dev, bb_i2c_scan_cb cb, void *user)
+{
+    for (uint16_t addr = 1U; addr < 128U; ++addr) {
+        bb_i2c_start(dev);
+        if (bb_i2c_write_byte(dev, (uint8_t)(addr << 1U))) {
+            if (cb) cb((uint8_t)addr, user);
+        }
+        bb_i2c_stop(dev);
+    }
+}
