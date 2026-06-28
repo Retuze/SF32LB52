@@ -28,19 +28,10 @@
 #define FT_REG_BULK_READ 0x01U
 
 /* ==========================================================================
- * Touch events (matches FT6146 hardware encoding)
- * ========================================================================== */
-enum {
-    TP_EVENT_DOWN = 0,
-    TP_EVENT_UP   = 1,
-    TP_EVENT_MOVE = 2,
-    TP_EVENT_RESERVE = 3,
-};
-
-/* ==========================================================================
  * Shared flag: ISR → pollEvent() signal
  * ========================================================================== */
 volatile int g_tp_irq_fired;
+volatile int g_tp_irq_cnt;
 
 /* ==========================================================================
  * I2C helpers
@@ -77,12 +68,19 @@ static void ft6146_irq_cb(uint32_t pin, void *arg)
 {
     (void)pin;
     (void)arg;
+    ++g_tp_irq_cnt;
     g_tp_irq_fired = 1;
 }
 
 /* ==========================================================================
  * Public API
  * ========================================================================== */
+
+static void print_addr(uint8_t addr, void *user)
+{
+    (void)user;
+    printf(" 0x%02X", (unsigned)addr);
+}
 
 void tp_ft6146_init(tp_ft6146_t *tp)
 {
@@ -93,7 +91,7 @@ void tp_ft6146_init(tp_ft6146_t *tp)
     pinMode(tp->pin_rst, OUTPUT);
     digitalWrite(tp->pin_rst, LOW);   /* hold in reset */
 
-    pinMode(tp->pin_int, INPUT_PULLUP); /* active-low, pull-up when idle */
+    pinMode(tp->pin_int, INPUT); /* active-low, external pull-up */
 
     /* 3. Power-on sequence: RST low 5ms → RST high → wait 80ms */
     digitalWrite(tp->pin_rst, LOW);
@@ -101,7 +99,12 @@ void tp_ft6146_init(tp_ft6146_t *tp)
     digitalWrite(tp->pin_rst, HIGH);
     delay_ms(80);
 
-    /* 4. Chip ID verification (non-fatal: warn only) */
+    /* 4. I2C bus scan */
+    printf("[ft6146] I2C scan: ");
+    bb_i2c_scan(&tp->i2c, print_addr, NULL);
+    printf("\r\n");
+
+    /* 5. Chip ID verification */
     uint8_t id_h = 0, id_l = 0;
     if (read_regs(tp, FT_REG_READ_ID_H, &id_h, 1U) == 0 &&
         read_regs(tp, FT_REG_READ_ID_L, &id_l, 1U) == 0) {
@@ -150,7 +153,7 @@ int tp_ft6146_read(tp_ft6146_t *tp, int *out_x, int *out_y, int *out_event)
     int x = (int)((buf[2] & 0x0FU) << 8) | (int)buf[3];
     int y = (int)((buf[4] & 0x0FU) << 8) | (int)buf[5];
 
-    *out_event = (event_flag == TP_EVENT_UP) ? TP_EVENT_UP : TP_EVENT_DOWN;
+    *out_event = (int)event_flag;  /* hardware encoding matches TP_EVENT_* enum */
     *out_x = tp->max_x - x;
     *out_y = tp->max_y - y;
 
@@ -160,4 +163,9 @@ int tp_ft6146_read(tp_ft6146_t *tp, int *out_x, int *out_y, int *out_event)
 bool tp_ft6146_touched(tp_ft6146_t *tp)
 {
     return digitalRead(tp->pin_int) == LOW;
+}
+
+int tp_ft6146_read_reg(tp_ft6146_t *tp, uint8_t reg, uint8_t *buf, uint16_t len)
+{
+    return read_regs(tp, reg, buf, len);
 }

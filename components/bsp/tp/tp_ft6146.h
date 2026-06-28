@@ -19,10 +19,19 @@ extern "C" {
 
 #define TP_FT6146_MAX_POINTS  2
 
+/* Touch event encoding (matches FT6146 hardware) */
+enum {
+    TP_EVENT_DOWN = 0,
+    TP_EVENT_UP   = 1,
+    TP_EVENT_MOVE = 2,
+    TP_EVENT_RESERVE = 3,
+};
+
 /**
  * @brief ISR → pollEvent flag. Set by GPIO1_IRQHandler, cleared by SF32Input::pollEvent().
  */
 extern volatile int g_tp_irq_fired;
+extern volatile int g_tp_irq_cnt;
 
 typedef struct {
     bb_i2c_t    i2c;         /* I2C bus config (SDA/SCL + optional delay) */
@@ -53,6 +62,7 @@ int tp_ft6146_read(tp_ft6146_t *tp, int *out_x, int *out_y, int *out_event);
  * @return true if CTP_INT is LOW (touch present).
  */
 bool tp_ft6146_touched(tp_ft6146_t *tp);
+int  tp_ft6146_read_reg(tp_ft6146_t *tp, uint8_t reg, uint8_t *buf, uint16_t len);
 
 #ifdef __cplusplus
 }

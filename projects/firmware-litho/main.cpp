@@ -68,10 +68,105 @@ public:
     }
 };
 
+/* VSYNC via TE rising edge (TE signal from LCD = display refresh) */
+volatile int g_vsync;
+
+/* ── TE interval measurement ──────────────────────────────────────────── */
+/* Uses DWT cycle counter @ HCLK (240 MHz → 1 tick = 4.167 ns) */
+
+#define TE_HISTORY   256           /* rolling window for average */
+#define TE_PRINT_N   128           /* print stats every N TE interrupts */
+
+static volatile uint32_t g_te_last_cyc;   /* DWT_CYCCNT at last TE */
+static volatile uint32_t g_te_delta;      /* most recent interval (cycles) */
+static volatile uint32_t g_te_sum;        /* sum of deltas in window */
+static volatile uint32_t g_te_min;        /* min delta in window */
+static volatile uint32_t g_te_max;        /* max delta in window */
+static volatile uint32_t g_te_count;      /* total TE count (wraps) */
+static volatile uint32_t g_te_window_n;   /* samples in current window */
+
+static void te_isr(uint32_t pin, void *arg)
+{
+    (void)pin; (void)arg;
+    g_vsync = 1;
+
+    uint32_t now = DWT_CYCCNT;
+    uint32_t last = g_te_last_cyc;
+    g_te_last_cyc = now;
+
+    if (last != 0U) {
+        uint32_t delta = now - last;
+        g_te_delta = delta;
+
+        if (g_te_window_n == 0U) {
+            g_te_sum = delta;
+            g_te_min = delta;
+            g_te_max = delta;
+            g_te_window_n = 1U;
+        } else if (g_te_window_n < TE_HISTORY) {
+            g_te_sum += delta;
+            if (delta < g_te_min) g_te_min = delta;
+            if (delta > g_te_max) g_te_max = delta;
+            g_te_window_n++;
+        } else {
+            /* rolling: subtract oldest approximation and add new */
+            g_te_sum = g_te_sum - (g_te_sum / TE_HISTORY) + delta;
+            if (delta < g_te_min) g_te_min = delta;
+            if (delta > g_te_max) g_te_max = delta;
+        }
+    }
+    g_te_count++;
+}
+
+static void vsync_wait(void)
+{
+    while (!g_vsync) { __asm volatile("wfi"); }
+    g_vsync = 0;
+}
+
+/* Print TE frame-rate stats. Call periodically from main loop. */
+static void te_heartbeat(void)
+{
+    static uint32_t last_print_count;
+
+    if (g_te_count - last_print_count < TE_PRINT_N) return;
+    last_print_count = g_te_count;
+
+    uint32_t n    = g_te_window_n;
+    uint32_t sum  = g_te_sum;
+    uint32_t min  = g_te_min;
+    uint32_t max  = g_te_max;
+    uint32_t clk  = clk_get_hz();
+
+    if (n == 0U) return;
+
+    uint32_t avg_cyc = sum / n;
+    /* Convert cycles → µs (× 10 for 1 decimal) */
+    uint32_t avg_us_x10 = (uint32_t)((uint64_t)avg_cyc * 10000000ULL / clk);
+    uint32_t min_us_x10 = (uint32_t)((uint64_t)min     * 10000000ULL / clk);
+    uint32_t max_us_x10 = (uint32_t)((uint64_t)max     * 10000000ULL / clk);
+    /* FPS × 10 via integer math — picolibc has no %f support */
+    uint32_t fps_x10 = (uint32_t)((uint64_t)clk * 10ULL / avg_cyc);
+
+    printf("[TE] %lu frames | avg %lu.%lu ms | min %lu.%lu max %lu.%lu | %lu.%lu fps\r\n",
+           (unsigned long)g_te_count,
+           (unsigned long)(avg_us_x10 / 10000U), (unsigned long)((avg_us_x10 / 1000U) % 10U),
+           (unsigned long)(min_us_x10 / 10000U), (unsigned long)((min_us_x10 / 1000U) % 10U),
+           (unsigned long)(max_us_x10 / 10000U), (unsigned long)((max_us_x10 / 1000U) % 10U),
+           (unsigned long)(fps_x10 / 10U), (unsigned long)(fps_x10 % 10U));
+
+    /* reset min/max for next window */
+    g_te_min = ~0U;
+    g_te_max = 0U;
+}
+
 extern "C" int main()
 {
     printf("\r\n[litho] Gallery\r\n");
     clk_set_hz(HCLK_240MHZ);
+
+    cache_enable();
+    printf("[litho] I+D Cache + MPI2 prefetch ON\r\n");
 
     lcd_set_bus(&lcd_bus_qspi);
     lcd_set_ic(&lcd_ic_co5300);
@@ -79,13 +174,22 @@ extern "C" int main()
     lcd_set_pins(LCD_RST, LCD_BL);
     lcd_init();
 
+    /* Init TE stats (DWT_CYCCNT already enabled by SystemInit) */
+    g_te_min = ~0U;
+    g_te_last_cyc = 0U;
+
+    /* TE VSYNC */
+    pinMode(LCD_TE, INPUT);
+    attachInterrupt(LCD_TE, te_isr, RISING, NULL);
+    printf("[litho] VSYNC enabled on TE pin %d\r\n", LCD_TE);
+
     SF32Display display;
     display.init(kScreenW, kScreenH);
     SF32Input input;
     SF32Tick  tick;
 
     WindowManager wm(display, input, tick);
-    wm.initPFB(390, 50, 2);  /* 50px blocks × pool=2: render/xfer pipeline */
+    wm.initPFB(390, 50, 2);
 
     ActivityManager am(wm);
     am.registerActivity<GalleryActivity>("Gallery");
@@ -94,7 +198,11 @@ extern "C" int main()
     i.target = "Gallery";
     am.startActivity(i);
 
-    printf("[litho] running\r\n");
-    wm.run();
+    printf("[litho] running (vsync mode)\r\n");
+    while (true) {
+        vsync_wait();
+        te_heartbeat();
+        if (!wm.runOnce()) break;
+    }
     return 0;
 }

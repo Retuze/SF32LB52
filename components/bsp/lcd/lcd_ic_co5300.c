@@ -1,13 +1,15 @@
 /**
  * @file lcd_ic_co5300.c
  * @brief CO5300 OLED panel IC driver.
+ *
+ * Default refresh: ~60Hz.  Define LCD_50HZ before including this file
+ * (or via -D) to switch to ~50Hz for lower FPS targets.
  */
 
 #include "lcd.h"
 #include "hal.h"
 #include <stdio.h>
 
-/* cmd_write does not manage CS — caller wraps with begin/end */
 static void ic_write(const lcd_bus_t *b, uint8_t cmd, const uint8_t *p, uint32_t n)
 {
     b->begin();
@@ -17,16 +19,36 @@ static void ic_write(const lcd_bus_t *b, uint8_t cmd, const uint8_t *p, uint32_t
 
 static int co5300_init(const lcd_bus_t *b)
 {
+    /* Unlock */
     ic_write(b,0xFE, (const uint8_t*)"\x20", 1);
     ic_write(b,0xF4, (const uint8_t*)"\x5A", 1);
     ic_write(b,0xF5, (const uint8_t*)"\x59", 1);
+
+#ifdef LCD_50HZ
+    /* ≈50 Hz timing */
+    ic_write(b,0xFE, (const uint8_t*)"\x40", 1);
+    ic_write(b,0x39, (const uint8_t*)"\x24", 1);
+    ic_write(b,0x3D, (const uint8_t*)"\x08", 1);
+    ic_write(b,0x3F, (const uint8_t*)"\x00", 1);
+    ic_write(b,0x40, (const uint8_t*)"\x5D", 1);
+    ic_write(b,0xFE, (const uint8_t*)"\x70", 1);
+    ic_write(b,0x65, (const uint8_t*)"\x16", 1);
+    ic_write(b,0x66, (const uint8_t*)"\x53", 1);
+    ic_write(b,0x67, (const uint8_t*)"\x10", 1);
+    ic_write(b,0x8F, (const uint8_t*)"\xE7", 1);
+    ic_write(b,0x90, (const uint8_t*)"\x45", 1);
+    ic_write(b,0x91, (const uint8_t*)"\x80", 1);
+#endif
+
+    /* Re-lock + common init */
     ic_write(b,0xFE, (const uint8_t*)"\x20", 1);
     ic_write(b,0xF4, (const uint8_t*)"\xA5", 1);
     ic_write(b,0xF5, (const uint8_t*)"\xA5", 1);
     ic_write(b,0xFE, (const uint8_t*)"\x00", 1);
+
     ic_write(b,0xC4, (const uint8_t*)"\x80", 1);
     ic_write(b,0x3A, (const uint8_t*)"\x55", 1);
-    ic_write(b,0x35, (const uint8_t*)"\x00", 1);
+    ic_write(b,0x35, (const uint8_t*)"\x00", 1);  /* TE on */
     ic_write(b,0x53, (const uint8_t*)"\x20", 1);
     ic_write(b,0x51, (const uint8_t*)"\x80", 1);
     ic_write(b,0x63, (const uint8_t*)"\xFF", 1);
