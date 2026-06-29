@@ -92,3 +92,24 @@ void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *
     lcd_send(rgb565, (uint32_t)w * (uint32_t)h);
 }
 
+/* ── Async bitblt (weak defaults — overridden by LCDC bus driver) ────────── */
+
+__attribute__((weak))
+void lcd_bitblt_async(uint16_t x, uint16_t y,
+                      uint16_t w, uint16_t h,
+                      const uint16_t *rgb565,
+                      void (*done)(void *ctx), void *ctx)
+{
+    lcd_bitblt(x, y, w, h, rgb565);
+    if (done) done(ctx);
+}
+
+__attribute__((weak))
+void lcd_wait_idle(void) {}
+
+__attribute__((weak))
+uint32_t lcd_xfer_cycles(void) { return 0; }
+
+__attribute__((weak))
+void lcd_clear_xfer_cycles(void) {}
+

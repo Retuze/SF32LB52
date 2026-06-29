@@ -12,6 +12,18 @@ public:
     virtual void bitblt(const uint16_t* data,
                        int x, int y, int w, int h) = 0;
 
+    /** Async bitblt — returns immediately, calls done(ctx) on completion.
+     *  Default falls back to sync bitblt. */
+    virtual void bitbltAsync(const uint16_t* data,
+                             int x, int y, int w, int h,
+                             void (*done)(void* ctx), void* ctx) {
+        bitblt(data, x, y, w, h);
+        if (done) done(ctx);
+    }
+
+    /** Busy-wait until async xfer completes. */
+    virtual void waitReady() {}
+
     virtual void flush() = 0;
 
     virtual int width()  const = 0;

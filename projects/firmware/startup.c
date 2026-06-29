@@ -162,6 +162,7 @@ extern void SysTick_Handler(void);
 
 /* ---- Peripheral interrupt handlers (weak, overridable) ---- */
 void GPIO1_IRQHandler(void)        __attribute__((weak, alias("def_handler")));
+void LCDC1_IRQHandler(void)        __attribute__((weak, alias("def_handler")));
 
 /* ---- Vector table (Cortex-M33, 16 system + 85 peripheral = 101 entries) ---- */
 #define IRQ_VECTORS 85U
@@ -188,5 +189,6 @@ const uintptr_t g_pfnVectors[16U + IRQ_VECTORS] = {
     [16 ... 99] = (uintptr_t)def_handler,
 
     /* Override with real handlers for enabled IRQs */
-    [16U + (uintptr_t)GPIO1_IRQn] = (uintptr_t)GPIO1_IRQHandler,  /* index 100 */
+    [16U + (uintptr_t)GPIO1_IRQn]  = (uintptr_t)GPIO1_IRQHandler,  /* index 100 */
+    [16U + 63U]                    = (uintptr_t)LCDC1_IRQHandler,   /* LCDC1 */
 };

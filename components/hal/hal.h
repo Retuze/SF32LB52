@@ -34,6 +34,9 @@
 /* HAL — higher-level wrappers */
 #include "hal_pwm.h"
 
+/* LCDC hardware peripheral (SDK port) */
+#include "bf0_hal_lcdc.h"
+
 /* Provided by each project's system.c */
 void     SystemInit(void);
 uint32_t millis(void);

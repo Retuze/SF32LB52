@@ -70,9 +70,19 @@ void lcd_fill_color(uint16_t color);
 void lcd_draw_pixel(uint16_t x, uint16_t y, uint16_t color);
 void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *rgb565);
 
+/* Async bitblt — weak defaults in lcd.c, overridden by LCDC bus driver */
+void lcd_bitblt_async(uint16_t x, uint16_t y,
+                      uint16_t w, uint16_t h,
+                      const uint16_t *rgb565,
+                      void (*done)(void *ctx), void *ctx);
+void lcd_wait_idle(void);
+uint32_t lcd_xfer_cycles(void);
+void     lcd_clear_xfer_cycles(void);
+
 /* ── Available instances ─────────────────────────────────────────────── */
 
 extern const lcd_bus_t lcd_bus_qspi;
+extern const lcd_bus_t lcd_bus_qspi_lcdc;
 extern const lcd_ic_t  lcd_ic_co5300;
 
 #ifdef __cplusplus

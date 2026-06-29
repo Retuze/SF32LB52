@@ -168,6 +168,11 @@ extern "C" int main()
     cache_enable();
     printf("[litho] I+D Cache + MPI2 prefetch ON\r\n");
 
+    /* Select bus driver:
+     *   lcd_bus_qspi       — bit-bang QSPI, no IRQ needed
+     *   lcd_bus_qspi_lcdc  — LCDC hardware QSPI, async DMA, needs LCDC1_IRQ
+     * To switch, also change bsp/CMakeLists.txt to compile the matching .c file.
+     */
     lcd_set_bus(&lcd_bus_qspi);
     lcd_set_ic(&lcd_ic_co5300);
     lcd_set_geometry(LCD_WIDTH, LCD_HEIGHT);

@@ -21,6 +21,10 @@ add_library(hal STATIC
 
     # --- HAL drivers ---
     ${CMAKE_CURRENT_SOURCE_DIR}/hal_pwm.c
+
+    # --- SDK LCDC port (hardware QSPI LCD output) ---
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcdc/bf0_hal_lcdc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcdc/hal_lcdc_port.c
 )
 
 target_compile_options(hal PUBLIC
@@ -34,6 +38,7 @@ target_compile_options(hal PUBLIC
 target_include_directories(hal PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}          # hal.h, SF32LB52.h, hal_*.h
     ${CMAKE_CURRENT_SOURCE_DIR}/ll       # ll_*.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcdc     # bf0_hal_lcdc.h, bf0_hal.h, register.h, ...
 )
 
 if(ENABLE_WARNINGS)
