@@ -8,6 +8,7 @@ add_library(bsp STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd_qspi_bitbang.c
     ${CMAKE_CURRENT_SOURCE_DIR}/lcd/co5300_oled.c
     ${CMAKE_CURRENT_SOURCE_DIR}/lcd/nv3030b_tft.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd_lcdc_co5300.c
 )
 
 target_include_directories(bsp PUBLIC

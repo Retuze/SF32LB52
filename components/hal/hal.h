@@ -29,6 +29,7 @@
 #include "hal_gpio.h"
 #include "hal_pwm.h"
 #include "hal_uart.h"
+#include "bf0_hal_lcdc.h"
 
 /* LL */
 #include "ll_dwt.h"

@@ -153,7 +153,9 @@ void SVC_Handler(void)        __attribute__((weak, alias("Default_Handler")));
 void DebugMon_Handler(void)   __attribute__((weak, alias("Default_Handler")));
 void PendSV_Handler(void)     __attribute__((weak, alias("Default_Handler")));
 extern void SysTick_Handler(void);
+void LCDC1_IRQHandler(void)    __attribute__((weak, alias("Default_Handler")));
 
+#define EXT_IRQ(n) [16 + (n)] = (uintptr_t)Default_Handler
 /* ---- Vector table (Cortex-M33, 16 system exceptions) ---- */
 __attribute__((section(".isr_vector"), used))
 const uintptr_t g_pfnVectors[] = {
@@ -173,4 +175,21 @@ const uintptr_t g_pfnVectors[] = {
     0U,                             /* 13: (reserved) */
     (uintptr_t)PendSV_Handler,      /* 14: PendSV */
     (uintptr_t)SysTick_Handler,     /* 15: SysTick */
+    EXT_IRQ(0),  EXT_IRQ(1),  EXT_IRQ(2),  EXT_IRQ(3),
+    EXT_IRQ(4),  EXT_IRQ(5),  EXT_IRQ(6),  EXT_IRQ(7),
+    EXT_IRQ(8),  EXT_IRQ(9),  EXT_IRQ(10), EXT_IRQ(11),
+    EXT_IRQ(12), EXT_IRQ(13), EXT_IRQ(14), EXT_IRQ(15),
+    EXT_IRQ(16), EXT_IRQ(17), EXT_IRQ(18), EXT_IRQ(19),
+    EXT_IRQ(20), EXT_IRQ(21), EXT_IRQ(22), EXT_IRQ(23),
+    EXT_IRQ(24), EXT_IRQ(25), EXT_IRQ(26), EXT_IRQ(27),
+    EXT_IRQ(28), EXT_IRQ(29), EXT_IRQ(30), EXT_IRQ(31),
+    EXT_IRQ(32), EXT_IRQ(33), EXT_IRQ(34), EXT_IRQ(35),
+    EXT_IRQ(36), EXT_IRQ(37), EXT_IRQ(38), EXT_IRQ(39),
+    EXT_IRQ(40), EXT_IRQ(41), EXT_IRQ(42), EXT_IRQ(43),
+    EXT_IRQ(44), EXT_IRQ(45), EXT_IRQ(46), EXT_IRQ(47),
+    EXT_IRQ(48), EXT_IRQ(49), EXT_IRQ(50), EXT_IRQ(51),
+    EXT_IRQ(52), EXT_IRQ(53), EXT_IRQ(54), EXT_IRQ(55),
+    EXT_IRQ(56), EXT_IRQ(57), EXT_IRQ(58), EXT_IRQ(59),
+    EXT_IRQ(60), EXT_IRQ(61), EXT_IRQ(62),
+    [16 + 63] = (uintptr_t)LCDC1_IRQHandler,
 };

@@ -73,6 +73,7 @@ public:
 
         // Render each dirty region through PFB
         mPFB.clearStats();
+        mDisplay.clearTransferCycles();
         uint32_t frameCycles = DWT_CYCCNT;
         for (int ri = 0; ri < mDirtyList.count(); ri++) {
             const Region& r = mDirtyList.regions()[ri];

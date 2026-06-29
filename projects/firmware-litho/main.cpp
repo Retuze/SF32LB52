@@ -1,17 +1,12 @@
 /**
  * @file main.cpp
- * @brief LithoUI SF32LB52 demo — icon grid.
- *
- * Flash speed on this chip: ~81 KiB/s (no cache/prefetch).
- * All critical rendering code runs from RAM (.ramfunc).
- * Image pixel data stays in Flash (.rodata) — acceptable for static UI.
- * For smooth animation, use hardware LCDC peripheral.
+ * @brief LithoUI SF32LB52 demo - icon grid over hardware LCDC.
  */
 
 extern "C" {
 #include "hal.h"
 #include "board.h"
-#include "lcd_ref.h"
+#include "lcd_lcdc_co5300.h"
 }
 
 #include "core/litho_core.h"
@@ -31,8 +26,8 @@ extern "C" {
 
 using namespace litho;
 
-static const int kScreenW = LCD_WIDTH_REF;
-static const int kScreenH = LCD_HEIGHT_REF;
+static const int kScreenW = LCD_WIDTH;
+static const int kScreenH = LCD_HEIGHT;
 
 class GalleryActivity : public Activity {
 public:
@@ -51,7 +46,7 @@ public:
             IMG_CALENDAR, IMG_COMPASS, IMG_SPORTS,
             IMG_SLEEP, IMG_ALARM, IMG_STOPWATCH,
         };
-        for (int i = 0; i < (int)(sizeof(icons)/sizeof(icons[0])); i++) {
+        for (int i = 0; i < (int)(sizeof(icons) / sizeof(icons[0])); i++) {
             int cx = kGapX + (i % kCols) * (kIconW + kGapX);
             int cy = kStartY + (i / kCols) * (kIconH + kGapY);
             auto* iv = new ImageView(icons[i]);
@@ -59,7 +54,6 @@ public:
             iv->bounds().y = (int16_t)cy;
             root->addView(iv);
         }
-
     }
 
     void onResume() override {
@@ -74,13 +68,13 @@ void enable_flash_cache_prefetch(void);
 
 extern "C" int main()
 {
-    printf("\r\n[litho] Gallery\r\n");
+    printf("\r\n[litho] Gallery LCDC\r\n");
     rcc_set_system_hz(240000000UL);
 
     enable_flash_cache_prefetch();
     printf("[litho] I+D Cache + MPI2 prefetch ON\r\n");
 
-    lcd_ref_init();
+    lcd_lcdc_co5300_init();
 
     SF32Display display;
     display.init(kScreenW, kScreenH);
@@ -88,7 +82,7 @@ extern "C" int main()
     SF32Tick  tick;
 
     WindowManager wm(display, input, tick);
-    wm.initPFB(390, 50, 2);  /* 50px blocks × pool=2: render/xfer pipeline */
+    wm.initPFB(390, 50, 2);
 
     ActivityManager am(wm);
     am.registerActivity<GalleryActivity>("Gallery");

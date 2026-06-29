@@ -87,6 +87,35 @@ public:
         if (r1 > mRows) r1 = mRows;
 
         Painter painter;
+        struct AsyncSlot {
+            Tile* tile = nullptr;
+            volatile int done = 0;
+            uint32_t submitCycle = 0;
+            volatile uint32_t doneCycle = 0;
+            int statIndex = 0;
+        };
+        AsyncSlot slots[4];
+
+        auto releaseCompleted = [&]() {
+            for (int i = 0; i < mPoolSize && i < 4; i++) {
+                if (slots[i].tile != nullptr && slots[i].done) {
+                    if (slots[i].statIndex < 9) {
+                        mTileXfer[slots[i].statIndex] = slots[i].doneCycle - slots[i].submitCycle;
+                    }
+                    releaseTile(*slots[i].tile);
+                    slots[i].tile = nullptr;
+                    slots[i].done = 0;
+                }
+            }
+        };
+
+        auto waitForFreeTile = [&]() {
+            releaseCompleted();
+            while (mFreeCount == 0) {
+                display.waitReady();
+                releaseCompleted();
+            }
+        };
 
         for (int row = r0; row < r1; row++) {
             for (int col = c0; col < c1; col++) {
@@ -95,9 +124,10 @@ public:
                 int bw = blockActualW(col);
                 int bh = blockActualH(row);
 
+                waitForFreeTile();
+
                 uint32_t ts0 = DWT_CYCCNT;
                 Tile& tile = acquireTile();
-                // Clear tile (32-bit memset, replaces BgView fillRect)
                 {
                     uint32_t* p = (uint32_t*)tile.buffer();
                     uint32_t w = (uint32_t)(tile.width() * tile.height()) / 2;
@@ -112,19 +142,48 @@ public:
                 draw(painter, bx, by, bw, bh);
                 uint32_t ts2 = DWT_CYCCNT;
 
-                display.bitblt(tile.buffer(), bx, by, bw, bh);
-                uint32_t ts3 = DWT_CYCCNT;
-
-                releaseTile(tile);
+                int slotIndex = -1;
+                for (int i = 0; i < mPoolSize && i < 4; i++) {
+                    if (slots[i].tile == nullptr) { slotIndex = i; break; }
+                }
+                if (slotIndex < 0) {
+                    display.waitReady();
+                    releaseCompleted();
+                    for (int i = 0; i < mPoolSize && i < 4; i++) {
+                        if (slots[i].tile == nullptr) { slotIndex = i; break; }
+                    }
+                }
 
                 int ti = mStatTiles;
-                if (ti < 9) { mTileDraw[ti] = ts2 - ts1; mTileXfer[ti] = ts3 - ts2; }
+                AsyncSlot& slot = slots[slotIndex];
+                slot.tile = &tile;
+                slot.done = 0;
+                slot.submitCycle = DWT_CYCCNT;
+                slot.doneCycle = slot.submitCycle;
+                slot.statIndex = ti;
+                display.bitbltAsync(tile.buffer(), bx, by, bw, bh,
+                    [](void* ctx) {
+                        auto* s = static_cast<AsyncSlot*>(ctx);
+                        s->doneCycle = DWT_CYCCNT;
+                        s->done = 1;
+                    }, &slot);
+
+                if (ti < 9) { mTileDraw[ti] = ts2 - ts1; mTileXfer[ti] = 0; }
                 mStatSetup += ts1 - ts0;
                 mStatDraw  += ts2 - ts1;
-                mStatXfer  += ts3 - ts2;
                 mStatTiles++;
             }
         }
+
+        display.waitReady();
+        releaseCompleted();
+        for (int i = 0; i < mPoolSize && i < 4; i++) {
+            if (slots[i].tile != nullptr) {
+                releaseTile(*slots[i].tile);
+                slots[i].tile = nullptr;
+            }
+        }
+        mStatXfer = display.transferCycles();
     }
 
 private:

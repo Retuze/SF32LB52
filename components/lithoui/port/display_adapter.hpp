@@ -12,6 +12,15 @@ public:
     virtual void bitblt(const uint16_t* data,
                        int x, int y, int w, int h) = 0;
 
+    virtual void bitbltAsync(const uint16_t* data,
+                             int x, int y, int w, int h,
+                             void (*done)(void* ctx), void* ctx) {
+        bitblt(data, x, y, w, h);
+        if (done) done(ctx);
+    }
+
+    virtual void waitReady() {}
+
     virtual void flush() = 0;
 
     virtual int width()  const = 0;
