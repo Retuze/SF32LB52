@@ -6,15 +6,14 @@ Usage:  python3 tools/pack_res.py <ui_dir> [output_dir]
 Directory layout:
     ui/<name>/
       info.txt              name=..., version=...
-      rgb565/               opaque RGB565  → FMT_RGB565
-      rgba/                 RGBA with alpha → FMT_RGB565_A8
-      grayscale/            8-bit grayscale → FMT_GRAYSCALE
-      rotatable/            rotation-ready → FMT_RGB565 (triggers sin table)
+      opaque/               opaque color -> FMT_PAL8_RLE
+      alpha/                color + alpha -> FMT_PAL8_RLE_ALPHA
+      gray/                 grayscale -> FMT_A8_RLE (tintable)
+      rotate/               rotation-ready -> FMT_PAL8_RLE_ALPHA (triggers sin table)
 
 Outputs:
-    res_images.bin    binary bundle (header + entries + pixels + sin table)
+    res_images.bin    binary bundle
     res_images.h      ImageId enum, ImageEntry, inline accessors
-    sin_table.h       Q15 sin LUT (only if rotatable/ has images)
 """
 
 import os, struct, sys, math
@@ -38,19 +37,25 @@ VERSION     = 0x00010000
 ENTRY_SIZE  = 16
 HEADER_SIZE = 16
 
-FMT_RGB565     = 0
-FMT_RGB565_A8  = 1   # RGBA with alpha mask
-FMT_A8         = 2   # single-channel alpha (tintable, default black)
-FMT_RGB565_RLE = 3   # RLE compressed RGB565
-FMT_PAL8_RLE   = 4   # 256-color palette (RGB565) + byte-RLE 8-bit index
+# Format enum — 7 formats
+FMT_A8              = 0   # grayscale raw
+FMT_A8_RLE          = 1   # grayscale + RLE
+FMT_PAL8            = 2   # 256-color palette + raw index
+FMT_PAL8_RLE        = 3   # 256-color palette + RLE
+FMT_PAL8_ALPHA      = 4   # 256-color palette + raw index + raw alpha
+FMT_PAL8_ALPHA_RLE  = 5   # 256-color palette + RLE with inline alpha
+FMT_RGB565_RLE      = 6   # raw RGB565 + RLE (no palette, direct color)
+
+# Alpha levels (2 bits → 4 levels) for alpha formats
+ALPHA_LEVELS = [0, 85, 170, 255]
 
 FLAG_HAS_SIN  = 0x0001
 
-PRE_RGB565 = ""
-PRE_RGBA   = "A_"
+# Directory prefixes
+PRE_OPAQUE = ""
+PRE_ALPHA  = "A_"
 PRE_GRAY   = "G_"
 PRE_ROT    = "R_"
-PRE_PAL    = "P_"
 
 
 # ── helpers ──
@@ -63,88 +68,96 @@ def safe_enum_name(name):
     return name.replace("-", "_").replace(" ", "_").upper()
 
 
-# ── per‑type packer ──
-
-def pack_rgba(path):
-    """PNG → RGB565 pixels + A8 mask. Returns (w, h, pixels, alpha, has_alpha)."""
-    img = Image.open(path).convert("RGBA")
-    w, h = img.size
-    data = img.getdata()
-    pixels, alpha, has = [], [], False
-    for r, g, b, a in data:
-        pixels.append(rgba_to_rgb565(r, g, b))
-        alpha.append(a)
-        if a != 255: has = True
-    return w, h, pixels, alpha, has
+def luminance(r, g, b):
+    """BT.601 luminance, 0..255."""
+    return (r * 77 + g * 150 + b * 29) // 256
 
 
-def pack_rgb565(path):
-    """PNG → opaque RGB565. Alpha channel is discarded."""
-    img = Image.open(path).convert("RGBA")
-    w, h = img.size
-    data = img.getdata()
-    pixels = [rgba_to_rgb565(r, g, b) for r, g, b, _ in data]
-    return w, h, pixels
+def quantize_alpha(a):
+    """Map 0..255 alpha to nearest 2-bit level (0..3)."""
+    if a >= 213: return 3       # 255
+    if a >= 128: return 2       # 170
+    if a >= 43:  return 1       # 85
+    return 0                     # 0
+
+
+# ── unified RLE encoder ─────────────────────────────────────────────
+
+def encode_rle(values, w, h, alpha=None):
+    """
+    Encode a row-major array of bytes into RLE format.
+
+    No-alpha formats (alpha=None, FMT_A8_RLE / FMT_PAL8_RLE):
+      [value_byte][length_byte]  — length = count-1 (0..255, 1..256 pixels)
+
+    Alpha format (FMT_PAL8_RLE_ALPHA):
+      [value_byte][length_byte]
+        length.bit7 = 0 → opaque, bits6:0 = count-1 (1..128)
+        length.bit7 = 1 → alpha,  bits5:4 = alpha_level (0..3),
+                          bits2:0 = count-1 (1..8)
+
+    Returns bytes: [h*4 offset table][RLE stream].
+    """
+    out = bytearray(h * 4)  # placeholder for offset table
+    max_run_no_alpha = 256   # full 8-bit length
+    max_run_opaque   = 128   # bit7=0, bits6:0=7 bits
+
+    for y in range(h):
+        # Fill offset for this row
+        struct.pack_into('<I', out, y * 4, len(out))
+
+        row = values[y * w:(y + 1) * w]
+        row_alpha = alpha[y * w:(y + 1) * w] if alpha else None
+
+        x = 0
+        while x < w:
+            v = row[x]
+
+            if row_alpha:
+                # ── PAL8_RLE_ALPHA ──────────────────────────
+                a_cur = quantize_alpha(row_alpha[x])
+
+                if a_cur == 3:
+                    # Opaque → use opaque encoding (bit7=0), up to 128
+                    run = 1
+                    while (x + run < w and run < max_run_opaque and
+                           row[x + run] == v and quantize_alpha(row_alpha[x + run]) == 3):
+                        run += 1
+                    out.append(v)
+                    out.append(run - 1)  # bit7=0, count-1
+                    x += run
+                else:
+                    # Transparent → alpha encoding (bit7=1), up to 8
+                    run = 1
+                    while (x + run < w and run < 8 and
+                           row[x + run] == v and quantize_alpha(row_alpha[x + run]) == a_cur):
+                        run += 1
+                    out.append(v)
+                    out.append(0x80 | (a_cur << 4) | (run - 1))
+                    x += run
+            else:
+                # ── A8_RLE / PAL8_RLE (no alpha) ─────────────
+                run = 1
+                while x + run < w and run < max_run_no_alpha and row[x + run] == v:
+                    run += 1
+                out.append(v)
+                out.append(run - 1)  # full 8-bit: 0..255
+                x += run
+
+    return bytes(out)
 
 
 def rle_encode_rgb565(pixels, w, h):
-    """RLE compress RGB565 pixels with row offset table. Returns bytes or None."""
+    """
+    RLE compress RGB565 uint16 pixels with row offset table.
+    cmd byte: bit7=0→run(count-1)[color×2]; bit7=1→literal(count-1)[pixels×2n]
+    Returns bytes: [h*4 off][RLE stream], or None if RLE > raw.
+    """
     off_size = h * 4
-    out = bytearray(off_size)  # placeholder for offset table
-    for y in range(h):
-        row_off = len(out)
-        # Fill offset for this row (absolute position in buffer)
-        struct.pack_into('<I', out, y * 4, row_off)
-        row = pixels[y * w:(y + 1) * w]
-        x = 0
-        while x < w:
-            c = row[x]
-            # Count repeat run
-            run = 1
-            while x + run < w and run < 128 and row[x + run] == c:
-                run += 1
-            if run >= 2:
-                out.append(run - 1)          # repeat count-1
-                out.append(c & 0xFF)
-                out.append((c >> 8) & 0xFF)
-                x += run
-            else:
-                # Literal run
-                lit = 1
-                while x + lit < w and lit < 128:
-                    if x + lit + 1 < w and row[x + lit + 1] == row[x + lit]:
-                        break  # next pixel starts a repeat
-                    lit += 1
-                out.append(0x80 | (lit - 1))  # literal, count-1
-                for k in range(lit):
-                    pc = row[x + k]
-                    out.append(pc & 0xFF)
-                    out.append((pc >> 8) & 0xFF)
-                x += lit
-    return bytes(out) if len(out) < w * h * 2 else None
-
-
-def pack_palette(path):
-    """PNG -> 256-color palette (RGB565) + 8-bit index. Returns (w,h,index,pal565)."""
-    img = Image.open(path).convert("RGB")
-    q = img.quantize(colors=256, method=Image.MEDIANCUT)
-    w, h = q.size
-    idx = list(q.getdata())                 # 0..255 per pixel
-    pal = q.getpalette() or []
-    ncol = min(256, len(pal) // 3)
-    pal565 = [rgba_to_rgb565(pal[i*3], pal[i*3+1], pal[i*3+2]) for i in range(ncol)]
-    return w, h, idx, pal565
-
-
-def byte_rle_encode(idx, w, h):
-    """RLE 8-bit indices, same scheme as rle_encode_rgb565 but 1-byte values.
-    Layout: [uint32 off[h]][per-row cmd stream]. cmd: bit7=type, bit6:0=count-1.
-      run     (bit7=0): [cmd][index]
-      literal (bit7=1): [cmd][index x n]"""
-    out = bytearray(h * 4)
+    out = bytearray(off_size)
     for y in range(h):
         struct.pack_into('<I', out, y * 4, len(out))
-        row = idx[y * w:(y + 1) * w]
+        row = pixels[y * w:(y + 1) * w]
         x = 0
         while x < w:
             c = row[x]
@@ -153,7 +166,8 @@ def byte_rle_encode(idx, w, h):
                 run += 1
             if run >= 2:
                 out.append(run - 1)
-                out.append(c)
+                out.append(c & 0xFF)
+                out.append((c >> 8) & 0xFF)
                 x += run
             else:
                 lit = 1
@@ -162,22 +176,65 @@ def byte_rle_encode(idx, w, h):
                         break
                     lit += 1
                 out.append(0x80 | (lit - 1))
-                out.extend(row[x:x + lit])
+                for k in range(lit):
+                    pc = row[x + k]
+                    out.append(pc & 0xFF)
+                    out.append((pc >> 8) & 0xFF)
                 x += lit
-    return bytes(out)
+    return bytes(out) if len(out) < w * h * 2 else None
 
+
+# ── pack functions ──
 
 def pack_grayscale(path):
-    """PNG → 8‑bit grayscale (luminance of RGB)."""
+    """PNG → grayscale values (0..255)."""
     img = Image.open(path).convert("RGB")
     w, h = img.size
     data = img.getdata()
-    gray = []
-    for r, g, b in data:
-        # BT.601 luminance
-        y = (r * 77 + g * 150 + b * 29) // 256
-        gray.append(y)
+    gray = [luminance(r, g, b) for r, g, b in data]
     return w, h, gray
+
+
+def pack_pal8(path, with_alpha=False):
+    """
+    PNG → 256-color palette + index array + optional alpha array.
+
+    Returns (w, h, pal565, index, alpha_or_None).
+    """
+    if with_alpha:
+        img = Image.open(path).convert("RGBA")
+        w, h = img.size
+        data = list(img.getdata())
+        # Separate RGB and alpha
+        rgb_data = [(r, g, b) for r, g, b, a in data]
+        alpha_data = [a for r, g, b, a in data]
+    else:
+        img = Image.open(path).convert("RGB")
+        w, h = img.size
+        rgb_data = list(img.getdata())
+        alpha_data = None
+
+    # Quantize RGB to 256 colors
+    # Use Pillow's quantize on a temporary RGB image
+    tmp = Image.new("RGB", (w, h))
+    tmp.putdata(rgb_data)
+    q = tmp.quantize(colors=256, method=Image.MEDIANCUT)
+    idx = list(q.getdata())
+    pal = q.getpalette() or []
+    ncol = min(256, len(pal) // 3)
+    pal565 = [rgba_to_rgb565(pal[i*3], pal[i*3+1], pal[i*3+2]) for i in range(ncol)]
+
+    return w, h, pal565, idx, alpha_data
+
+
+def has_meaningful_alpha(alpha_data):
+    """Check if any alpha value is significantly non-opaque."""
+    if not alpha_data:
+        return False
+    for a in alpha_data:
+        if a < 240:  # threshold for "meaningfully transparent"
+            return True
+    return False
 
 
 # ── sin table ──
@@ -240,11 +297,13 @@ typedef enum ImageId {{
 }} ImageId;
 
 enum ImageFormat {{
-    FMT_RGB565     = 0,  // opaque RGB565
-    FMT_RGB565_A8  = 1,  // RGB + alpha mask
-    FMT_A8         = 2,  // single-channel alpha (default black, tintable)
-    FMT_RGB565_RLE = 3,  // RLE compressed RGB565 (byte stream, not pixel array)
-    FMT_PAL8_RLE   = 4,  // 256-color palette (512B RGB565) + byte-RLE 8-bit index
+    FMT_A8              = 0,  // grayscale raw
+    FMT_A8_RLE          = 1,  // grayscale + RLE
+    FMT_PAL8            = 2,  // 256-color palette + raw index
+    FMT_PAL8_RLE        = 3,  // 256-color palette + RLE
+    FMT_PAL8_ALPHA      = 4,  // 256-color palette + raw index + raw alpha
+    FMT_PAL8_ALPHA_RLE  = 5,  // 256-color palette + RLE with inline alpha
+    FMT_RGB565_RLE      = 6,  // raw RGB565 + RLE (direct color, no palette)
 }};
 
 #pragma pack(push, 1)
@@ -287,13 +346,6 @@ static inline const ImageEntry* imageEntry(ImageId id) {{
 static inline const void* imagePixels(ImageId id) {{
     return (const void*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
 }}
-static inline const uint8_t* imageAlpha(ImageId id) {{
-    const ImageEntry* e = imageEntry(id);
-    if (e->format == FMT_RGB565_RLE) return 0;
-    if (e->format != FMT_RGB565_A8) return 0;
-    return (const uint8_t*)(RES_IMAGE_BUNDLE + e->offset
-                           + (uint32_t)e->width * e->height * 2);
-}}
 {sin_accessor}
 #endif
 """
@@ -302,12 +354,10 @@ static inline const uint8_t* imageAlpha(ImageId id) {{
 def write_headers(gen_dir, bundle_name, version, entries, sin_table):
     """Write res_images.h."""
 
-    # ImageId enum entries
     def img_id(e):
         return f"IMG_{e['prefix']}{safe_enum_name(e['name'])}"
     enum_lines = [f"    {img_id(e)} = {e['id']}," for e in entries]
 
-    # Sin table accessor (inline, from bundle)
     has_sin = sin_table is not None
     if has_sin:
         sin_acc = (
@@ -388,19 +438,18 @@ def main():
 
     print(f"UI: {bundle_name}  version={version}")
 
-    # Collect images by type
-    types = [
-        ("rgb565",    PRE_RGB565, FMT_RGB565,    pack_rgb565,    False),
-        ("rgba",      PRE_RGBA,   FMT_RGB565_A8, pack_rgba,      True),
-        ("grayscale", PRE_GRAY,   FMT_A8,        pack_grayscale, False),
-        ("rotatable", PRE_ROT,    FMT_RGB565_A8, pack_rgba,      True),
-        ("palette",   PRE_PAL,    FMT_PAL8_RLE,  pack_palette,   False),
+    # Directory → format mapping
+    type_map = [
+        # (dirname,     prefix,     pack_fn,         with_alpha)
+        ("gray",        PRE_GRAY,   pack_grayscale,  False),
+        ("opaque",      PRE_OPAQUE, pack_pal8,       False),
+        ("alpha",       PRE_ALPHA,  pack_pal8,       True),
+        ("rotate",      PRE_ROT,    pack_pal8,       True),
     ]
 
     all_entries = []
-    all_chunks  = []
 
-    for dirname, prefix, default_fmt, pack_fn, has_mask in types:
+    for dirname, prefix, pack_fn, with_alpha in type_map:
         sub = ui_dir / dirname
         if not sub.is_dir():
             continue
@@ -408,40 +457,50 @@ def main():
         if not pngs:
             continue
 
-        print(f"\n  [{dirname}/]  {len(pngs)} files  default_fmt={default_fmt}  prefix='{prefix}'")
+        print(f"\n  [{dirname}/]  {len(pngs)} files  prefix='{prefix}'")
         for p in pngs:
             name = p.stem
-            actual_fmt = default_fmt
-            if default_fmt == FMT_PAL8_RLE:
-                w, h, idx, pal565 = pack_palette(p)
+
+            if pack_fn is pack_grayscale:
+                # Grayscale → A8_RLE or A8 (raw fallback if RLE > raw)
+                w, h, gray = pack_fn(p)
+                raw_bytes = struct.pack(f"<{w*h}B", *gray)
+                rle = encode_rle(gray, w, h)
+                if len(rle) < len(raw_bytes):
+                    chunk = rle
+                    actual_fmt = FMT_A8_RLE
+                else:
+                    chunk = raw_bytes
+                    actual_fmt = FMT_A8
+
+            elif pack_fn is pack_pal8:
+                # Palette-based: try raw / RLE, pick smallest
+                w, h, pal565, idx, alpha_data = pack_pal8(p, with_alpha)
+                # Pack palette as uint16_t (compact), uint32_t word-fill done at decode time
                 pal_bytes = struct.pack("<256H", *(list(pal565) + [0] * (256 - len(pal565))))
-                chunk = pal_bytes + byte_rle_encode(idx, w, h)
-            elif has_mask:
-                w, h, pixels, alpha, has_alpha = pack_fn(p)
-                pix_bytes = struct.pack(f"<{w*h}H", *pixels)
-                if has_alpha:
-                    alpha_bytes = struct.pack(f"<{w*h}B", *alpha)
-                    chunk = pix_bytes + alpha_bytes
-                else:
-                    # Fully opaque → plain RGB565, try RLE
-                    actual_fmt = FMT_RGB565
-                    rle = rle_encode_rgb565(pixels, w, h)
-                    chunk = rle if rle is not None else pix_bytes
-                    if rle is not None:
-                        actual_fmt = FMT_RGB565_RLE
-            else:
-                if default_fmt == FMT_A8:
-                    w, h, gray = pack_fn(p)
-                    chunk = struct.pack(f"<{w*h}B", *gray)
-                else:
-                    w, h, pixels = pack_fn(p)
-                    # Try RLE for rgb565 images
-                    rle = rle_encode_rgb565(pixels, w, h)
-                    if rle is not None:
-                        actual_fmt = FMT_RGB565_RLE
-                        chunk = rle
+                raw_idx = struct.pack(f"<{w*h}B", *idx)
+
+                if with_alpha and alpha_data and has_meaningful_alpha(alpha_data):
+                    raw_alpha = struct.pack(f"<{w*h}B", *alpha_data)
+                    raw_chunk = pal_bytes + raw_idx + raw_alpha
+                    rle_chunk = pal_bytes + encode_rle(idx, w, h, alpha=alpha_data)
+                    if len(rle_chunk) < len(raw_chunk):
+                        chunk, actual_fmt = rle_chunk, FMT_PAL8_ALPHA_RLE
                     else:
-                        chunk = struct.pack(f"<{w*h}H", *pixels)
+                        chunk, actual_fmt = raw_chunk, FMT_PAL8_ALPHA
+                else:
+                    # Opaque: try PAL8 raw, PAL8_RLE, RGB565_RLE
+                    raw_chunk = pal_bytes + raw_idx
+                    rle_chunk = pal_bytes + encode_rle(idx, w, h)
+                    # Also try RGB565_RLE (direct color, no palette)
+                    pixels = [pal565[i] for i in idx]  # map index→RGB565
+                    rgb565_rle = rle_encode_rgb565(pixels, w, h)
+                    choices = [(len(raw_chunk), FMT_PAL8, raw_chunk)]
+                    choices.append((len(rle_chunk), FMT_PAL8_RLE, rle_chunk))
+                    if rgb565_rle is not None:
+                        choices.append((len(rgb565_rle), FMT_RGB565_RLE, rgb565_rle))
+                    best = min(choices, key=lambda x: x[0])
+                    _, actual_fmt, chunk = best
 
             entry = {
                 "id":     len(all_entries),
@@ -455,8 +514,7 @@ def main():
                 "chunk":  chunk,
             }
             all_entries.append(entry)
-            all_chunks.append(chunk)
-            print(f"    {prefix}{name:20s} {w}x{h}  {len(chunk)}B")
+            print(f"    {prefix}{name:20s} {w}x{h}  fmt={actual_fmt}  {len(chunk)}B")
 
     # Sin table — only if rotatable/ has images
     rot_count = sum(1 for e in all_entries if e["prefix"] == PRE_ROT)
@@ -466,7 +524,7 @@ def main():
 
     # Write outputs
     bin_path = GEN_DIR / "res_images.bin"
-    write_bin(bin_path, all_entries, all_chunks, sin_table)
+    write_bin(bin_path, all_entries, [e["chunk"] for e in all_entries], sin_table)
     bin_size = os.path.getsize(bin_path)
     print(f"\n  Bundle: {bin_path.name} ({bin_size} bytes, {len(all_entries)} images)")
 

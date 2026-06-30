@@ -5,10 +5,9 @@
 
 add_library(bsp STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd.c
-    # Bus driver: choose ONE of the two below
-    ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd_bus_qspi.c        # bit-bang QSPI (default)
-    # ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd_bus_qspi_lcdc.c  # LCDC hardware QSPI (async DMA)
-    ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd_ic_co5300.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd_bus_qspi.c       # bit-bang QSPI
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd_ic_co5300.c      # CO5300 IC driver
+    ${CMAKE_CURRENT_SOURCE_DIR}/lcd/lcd_lcdc_co5300.c    # CO5300 via hardware LCDC QSPI
     ${CMAKE_CURRENT_SOURCE_DIR}/tp/tp_ft6146.c
 )
 

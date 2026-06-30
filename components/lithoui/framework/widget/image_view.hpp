@@ -19,7 +19,6 @@ public:
 
     void setImageId(ImageId id) {
         mImageId = id;
-        // Adopt the image's native size unless a fixed size was requested.
         if (!mExplicitSize && id < IMG_COUNT) {
             const ImageEntry* e = imageEntry(id);
             mWidth         = e->width;
@@ -31,7 +30,7 @@ public:
     }
     ImageId imageId() const { return mImageId; }
 
-    // ---- tint ----
+    // ---- tint (for A8_RLE grayscale images) ----
 
     void setTintColor(RGB565 color) { mTint = color; mHasTint = true; invalidate(); }
     void clearTint()                { mHasTint = false;          invalidate(); }
@@ -39,8 +38,6 @@ public:
     RGB565 tintColor()  const { return mTint; }
 
     // ---- rotation ----
-    // Angle is stored in deci-degrees (1/10°) so a continuous animation can
-    // step in sub-degree increments (smooth sweep) instead of 1° jumps.
 
     void setRotationAngleDeci(int deci, int pivotX, int pivotY) {
         mPivotSet = true;
@@ -57,14 +54,10 @@ public:
         invalidate();
         if (mDirtyList) mDirtyList->markDirty(old);
     }
-    // Default pivot = view center, unless a custom pivot was set before
-    // (so an animator driving the 1-arg form keeps the chosen pivot).
     void setRotationAngleDeci(int deci) {
         if (mPivotSet) setRotationAngleDeci(deci, mPivotX, mPivotY);
         else           setRotationAngleDeci(deci, mWidth / 2, mHeight / 2);
     }
-
-    // Whole-degree convenience wrappers.
     void setRotationAngle(int16_t degrees, int pivotX, int pivotY) {
         setRotationAngleDeci((int)degrees * 10, pivotX, pivotY);
     }
@@ -79,7 +72,6 @@ public:
 
     void    clearRotation() {
         if (!mHasAngle) return;
-
         Region old = screenBounds();
         mHasAngle = false;
         invalidate();
@@ -91,12 +83,10 @@ public:
     Region transformedBounds() const override {
         if (!mHasAngle) return View::transformedBounds();
 
-        // Start with base class (bounds + translation)
         Region base = View::transformedBounds();
 
-        // Rotate 4 corners around pivot, take bounding box
         int   w = mBounds.width, h = mBounds.height;
-        int a = ((mAngleDeci % 3600) + 3600) % 3600;   // deci-degrees
+        int a = ((mAngleDeci % 3600) + 3600) % 3600;
 
         if (a == 0) return base;
 
@@ -134,14 +124,9 @@ public:
             const ImageEntry* e    = imageEntry(mImageId);
             const void*       src  = (const void*)imagePixels(mImageId);
             const RGB565*     tint = mHasTint ? &mTint : nullptr;
-            // Draw by the image's real format:
-            //   FMT_RGB565 (0)     opaque  → word-copy fast path
-            //   FMT_RGB565_A8 (1)  RGB + A8 alpha plane → needs mask
-            //   FMT_A8 (2)         alpha only, filled with tint
-            //   FMT_RGB565_RLE (3) RLE-decoded opaque path
-            const int      fmt  = e->format;
-            const uint8_t* mask = (fmt == FMT_RGB565_A8) ? imageAlpha(mImageId)
-                                                         : nullptr;
+            const int         fmt  = e->format;
+            // Alpha is inline in RLE stream for new formats — no separate mask
+            const uint8_t* mask = nullptr;
 
             if (mHasAngle) {
                 p.drawImageRotatedDeci(src, fmt, e->width, e->height,
@@ -158,7 +143,7 @@ public:
 private:
     int       mWidth    = 0;
     int       mHeight   = 0;
-    bool      mExplicitSize = false;  // true = fixed size, ignore image size
+    bool      mExplicitSize = false;
     ImageId   mImageId  = IMG_COUNT;
     RGB565    mTint     = {0};
     bool      mHasTint  = false;

@@ -116,6 +116,17 @@ public:
 
     void quit() { mRunning = false; }
 
+    /** Re-dirty a region for the next frame (benchmark / free-run). */
+    void invalidateRegion(const Region& r) { mDirtyList.markDirty(r); }
+
+    void invalidateAll() {
+        Region r;
+        r.x = 0; r.y = 0;
+        r.width  = (int16_t)mDisplay.width();
+        r.height = (int16_t)mDisplay.height();
+        mDirtyList.markDirty(r);
+    }
+
     AnimationManager& animationManager() { return mAnimMgr; }
 
     int displayWidth()  const { return mDisplay.width(); }

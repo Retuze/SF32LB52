@@ -6,59 +6,60 @@
 #define RES_BUNDLE_VERSION 0x00000001
 
 typedef enum ImageId {
-    IMG_03 = 0,
-    IMG_ALARM = 1,
-    IMG_CALENDAR = 2,
-    IMG_CAMERA = 3,
-    IMG_COMPASS = 4,
-    IMG_DIAL = 5,
-    IMG_MESSAGES = 6,
-    IMG_MUSIC = 7,
-    IMG_SETTINGS = 8,
-    IMG_SLEEP = 9,
-    IMG_SPORTS = 10,
-    IMG_STOPWATCH = 11,
-    IMG_WEATHER = 12,
-    IMG_A_03 = 13,
-    IMG_A_ALARM = 14,
-    IMG_A_CALCULATOR = 15,
-    IMG_A_CALENDAR = 16,
-    IMG_A_CALL_RECORDS = 17,
-    IMG_A_CAMERA = 18,
-    IMG_A_COMPASS = 19,
-    IMG_A_CONTACT_PERSON = 20,
-    IMG_A_DIAL = 21,
-    IMG_A_FIND_PHONE = 22,
-    IMG_A_GAME = 23,
-    IMG_A_MAP_NAVIGATION = 24,
-    IMG_A_MESSAGES = 25,
-    IMG_A_MUSIC = 26,
-    IMG_A_SETTINGS = 27,
-    IMG_A_SHUTDWON = 28,
-    IMG_A_SLEEP = 29,
-    IMG_A_SOS = 30,
-    IMG_A_SPORTS = 31,
-    IMG_A_STOPWATCH = 32,
-    IMG_A_STRESS = 33,
-    IMG_A_TEST = 34,
-    IMG_A_TIMER = 35,
-    IMG_A_VIDEO_CONTROL = 36,
-    IMG_A_VOICE_ASSISTANT = 37,
-    IMG_A_WEATHER = 38,
-    IMG_G_MUSIC = 39,
+    IMG_G_MUSIC = 0,
+    IMG_03 = 1,
+    IMG_ALARM = 2,
+    IMG_CALENDAR = 3,
+    IMG_CAMERA = 4,
+    IMG_COMPASS = 5,
+    IMG_DIAL = 6,
+    IMG_MESSAGES = 7,
+    IMG_MUSIC = 8,
+    IMG_SETTINGS = 9,
+    IMG_SLEEP = 10,
+    IMG_SPORTS = 11,
+    IMG_STOPWATCH = 12,
+    IMG_WEATHER = 13,
+    IMG_A_03 = 14,
+    IMG_A_ALARM = 15,
+    IMG_A_CALCULATOR = 16,
+    IMG_A_CALENDAR = 17,
+    IMG_A_CALL_RECORDS = 18,
+    IMG_A_CAMERA = 19,
+    IMG_A_COMPASS = 20,
+    IMG_A_CONTACT_PERSON = 21,
+    IMG_A_DIAL = 22,
+    IMG_A_FIND_PHONE = 23,
+    IMG_A_GAME = 24,
+    IMG_A_MAP_NAVIGATION = 25,
+    IMG_A_MESSAGES = 26,
+    IMG_A_MUSIC = 27,
+    IMG_A_SETTINGS = 28,
+    IMG_A_SHUTDWON = 29,
+    IMG_A_SLEEP = 30,
+    IMG_A_SOS = 31,
+    IMG_A_SPORTS = 32,
+    IMG_A_STOPWATCH = 33,
+    IMG_A_STRESS = 34,
+    IMG_A_TEST = 35,
+    IMG_A_TIMER = 36,
+    IMG_A_VIDEO_CONTROL = 37,
+    IMG_A_VOICE_ASSISTANT = 38,
+    IMG_A_WEATHER = 39,
     IMG_R_MIN = 40,
     IMG_R_SEC = 41,
     IMG_R_TEST = 42,
-    IMG_P_03 = 43,
-    IMG_COUNT = 44
+    IMG_COUNT = 43
 } ImageId;
 
 enum ImageFormat {
-    FMT_RGB565     = 0,  // opaque RGB565
-    FMT_RGB565_A8  = 1,  // RGB + alpha mask
-    FMT_A8         = 2,  // single-channel alpha (default black, tintable)
-    FMT_RGB565_RLE = 3,  // RLE compressed RGB565 (byte stream, not pixel array)
-    FMT_PAL8_RLE   = 4,  // 256-color palette (512B RGB565) + byte-RLE 8-bit index
+    FMT_A8              = 0,  // grayscale raw
+    FMT_A8_RLE          = 1,  // grayscale + RLE
+    FMT_PAL8            = 2,  // 256-color palette + raw index
+    FMT_PAL8_RLE        = 3,  // 256-color palette + RLE
+    FMT_PAL8_ALPHA      = 4,  // 256-color palette + raw index + raw alpha
+    FMT_PAL8_ALPHA_RLE  = 5,  // 256-color palette + RLE with inline alpha
+    FMT_RGB565_RLE      = 6,  // raw RGB565 + RLE (direct color, no palette)
 };
 
 #pragma pack(push, 1)
@@ -100,13 +101,6 @@ static inline const ImageEntry* imageEntry(ImageId id) {
 }
 static inline const void* imagePixels(ImageId id) {
     return (const void*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
-}
-static inline const uint8_t* imageAlpha(ImageId id) {
-    const ImageEntry* e = imageEntry(id);
-    if (e->format == FMT_RGB565_RLE) return 0;
-    if (e->format != FMT_RGB565_A8) return 0;
-    return (const uint8_t*)(RES_IMAGE_BUNDLE + e->offset
-                           + (uint32_t)e->width * e->height * 2);
 }
 
 // Access the sin table embedded in the resource bundle.

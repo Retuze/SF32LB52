@@ -258,7 +258,7 @@ drawImage 比 benchmark 慢 29% 是合理的：
 
 ### 资源打包（重要陷阱）
 
-`res_images.bin` 由 `tools/pack_res.py` **手动**生成，是 checked-in 预生成文件，**不在 CMake 构建流程里**。改了 `ui/hello_litho/{rgb565,rgba,grayscale,rotatable}/` 下的源图后必须手动重打包：
+`res_images.bin` 由 `tools/pack_res.py` **手动**生成，是 checked-in 预生成文件，**不在 CMake 构建流程里**。改了 `ui/hello_litho/{opaque,alpha,gray,rotate}/` 下的源图后必须手动重打包：
 
 ```bash
 python components/lithoui/tools/pack_res.py components/lithoui/ui/hello_litho components/lithoui/generated
@@ -268,50 +268,38 @@ python components/lithoui/tools/pack_res.py components/lithoui/ui/hello_litho co
 
 ### 格式选择与 ImageView
 
-| 源目录 | 前缀 | 格式 |
-|--------|------|------|
-| `rgb565/` | (无) | RGB565，RLE 更小则用 RLE (fmt 3) |
-| `rgba/` | `A_` | RGB565_A8 (fmt 1)，全不透明退 RLE/RGB565 |
-| `grayscale/` | `G_` | A8 (fmt 2)，tint 着色 |
-| `rotatable/` | `R_` | RGB565_A8 + sin 表 |
+3 种统一 RLE 格式，每条记录 `[value][length]`（2 字节），行偏移表 O(1) 跳行：
 
-`ImageView::onDraw` 按 `e->format` 真实格式绘制（fmt 1 传 `imageAlpha()` 做 mask 合成、fmt 2 A8、fmt 3 RLE、fmt 0 word-copy 快路径），不再一律当 fmt 0 丢 alpha。`ImageView(ImageId)` 默认跟随图片原生尺寸；`ImageView(w,h)` 才固定尺寸（缩放/裁剪用）。
+| 源目录 | 前缀 | 格式 | 编码 |
+|--------|------|------|------|
+| `opaque/` | (无) | FMT_PAL8_RLE (1) | `[idx][len]` len=count-1 (1~256) |
+| `alpha/` | `A_` | FMT_PAL8_RLE_ALPHA (2) | bit7=0 不透(1~128); bit7=1 透, bits5:4=alpha(0/85/170/255), bits2:0=count-1(1~8) |
+| `gray/` | `G_` | FMT_A8_RLE (0) | `[gray][len]` len=count-1 (1~256), tint 着色 |
+| `rotate/` | `R_` | FMT_PAL8_RLE_ALPHA (2) | 同上 + 触发 sin 表 |
 
-### draw = Flash 读带宽受限
+`ImageView::onDraw` 按 `e->format` 分派：fmt=0→A8 RLE 解码 (tint LUT)、fmt=1→PAL8 word-fill、fmt=2→PAL8 + pass2 alpha blend。
+alpha 内联在 RLE 流中，无独立 `imageAlpha()` 平面。`ImageView(ImageId)` 默认跟图片原生尺寸。
 
-同样 12 个 100×100 图标（120K 像素），三种格式 draw 差一个数量级，**正比于 Flash 读量**：
+### 图片格式（v2 — 统一 RLE）
 
-| 格式 | Flash 读量 | draw |
-|------|-----------|------|
-| RGB565_A8（alpha 合成） | 360 KB | 33,697 µs |
-| RGB565（word-copy） | 240 KB | 13,449 µs |
-| RLE | ~34 KB | 5,762 µs |
+全部采用统一 RLE 编码，每条记录 `[value][length]`（2 字节），行偏移表 O(1) 跳行。
 
-draw 是 **Flash→SRAM 带宽受限**，读得越少越快。RLE 即使逐像素解码，省下的 Flash 读量远超解码开销（图标大色块时）。
+| 格式 | 枚举值 | 编码 | 用途 |
+|------|--------|------|------|
+| FMT_A8_RLE | 0 | `[gray][len]` len=count-1 (1~256) | 灰度 tint |
+| FMT_PAL8_RLE | 1 | `[idx][len]` len=count-1 (1~256), 512B palette | 不透 |
+| FMT_PAL8_RLE_ALPHA | 2 | bit7=0→不透(1~128); bit7=1→alpha 4档(0/85/170/255)+count(1~8), 512B palette | 带透明度 |
 
-### RLE 行偏移表
+### 压缩率
 
-格式 `[uint32_t off[h]][每行自包含命令流]`；cmd 字节 = `bit7(类型) | bit6:0(count-1, 1~128)`：run=`[cmd][color]`、literal=`[cmd][px×n]`。`off[]` 让 PFB 分块时 `off[srcOffY]` **O(1) 跳到起始行**，避免每个 tile 从第 0 行重复解码。A/B 开关 `LITHO_RLE_NO_OFFSET_TABLE`（`painter.hpp`）实测：
+vs raw RGB565 总压缩率 **34.9%**（省 65%），100×100 图标典型 25-35% of raw index。
 
-| 场景 | RLE 率 | 每行 cmd | 带表 | 无表 | 差异 |
-|------|--------|---------|------|------|------|
-| 12×100px 图标 | 14% | ~49 B | 5,762 | 6,245 | +8.4% |
-| 360×360 卡通图 | 51% | 366 B | 10,748 | 37,828 | **+252%** |
-
-无表 per-tile 随 tile 单调递增（O(n²) skip），带表平坦（O(n)）。价值 ∝ skip 行数 × 每行 cmd 字节：**小图可有可无，大图/低压缩图不可或缺**（代价仅 `h×4` 字节）。
-
-### RLE 解码优化与理论极限
-
-硬件：Flash 72MHz QSPI 4线 STR = 36 MB/s 峰值（cached XIP 实测 ~25 MB/s）；SRAM 写 237 MB/s（瓶颈是 CPU 240MHz 发 store，非 SRAM 280MHz）。
-
-优化（`painter.hpp` RLE 段）：clip 从 per-pixel 提到 run 级（一次交集）+ run 用 32-bit word-fill + literal 用 memcpy：
-
-| 场景 | run 长 | 优化前 | 优化后 | 离理论极限 |
-|------|--------|--------|--------|-----------|
-| 12 图标 | ~12px | 5,762 µs | **2,932 µs (−49%)** | 1.23×（基本到顶）|
-| 360 大图 | ~3px | 10,748 µs | 9,252 µs (−14%) | 1.44× |
-
-图标 cyc/px 11.5→5.9（理论底 ~4.8）。run 越长批量写收益越大；低压缩图被密集 literal memcpy 限制。**优化后 draw 已非瓶颈**（图标 draw 占总帧 11%，xfer bit-bang QSPI 占 83%）。
+| 类型 | 100×100 典型 | 说明 |
+|------|-------------|------|
+| opaque/ | 2.5-4.9 KB | 纯色块图标压缩最好 |
+| alpha/ | 3.0-5.4 KB | 比旧 RGB565_A8 (30KB) 省 ~85% |
+| gray/ | ~2.2 KB | A8_RLE |
+| 复杂图 (>100%) | 360×360 卡通、VIDEO_CONTROL | RLE 比 raw index 大，但对 2B/px raw 仍是大赚 |
 
 ### bit-bang QSPI (xfer) 优化
 

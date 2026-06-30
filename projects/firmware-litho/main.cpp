@@ -1,17 +1,17 @@
 /**
  * @file main.cpp
- * @brief LithoUI SF32LB52 demo — icon grid.
+ * @brief LithoUI SF32LB52 demo — icon grid, rendered via hardware LCDC QSPI.
  *
- * Flash speed on this chip: ~81 KiB/s (no cache/prefetch).
- * All critical rendering code runs from RAM (.ramfunc).
- * Image pixel data stays in Flash (.rodata) — acceptable for static UI.
- * For smooth animation, use hardware LCDC peripheral.
+ * Panel is brought up over the bit-bang bus (proven init path), then the
+ * pixel transport is handed to the LCDC peripheral (async DMA).  The PFB
+ * tile pipeline (pool=2) draws tile N+1 while LCDC transmits tile N.
  */
 
 extern "C" {
 #include "hal.h"
 #include "board.h"
 #include "lcd.h"
+#include "lcd_lcdc_co5300.h"
 }
 
 #include "core/litho_core.h"
@@ -41,25 +41,31 @@ public:
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
 
+        // Background: 360x360 cartoon (PAL8 raw, opaque)
+        auto* bg = new ImageView(IMG_03);
+        bg->bounds().x = (int16_t)((kScreenW - 360) / 2);
+        bg->bounds().y = (int16_t)((kScreenH - 360) / 2);
+        root->addView(bg);
+
+        // 12 alpha icons overlaid in 3×4 grid
         static const int kCols = 3, kIconW = 100, kIconH = 100;
         static const int kGapX = (kScreenW - kCols * kIconW) / (kCols + 1);
         static const int kGapY = 15, kStartY = 40;
 
-        ImageId icons[] = {
-            IMG_DIAL, IMG_MESSAGES, IMG_MUSIC,
-            IMG_SETTINGS, IMG_CAMERA, IMG_WEATHER,
-            IMG_CALENDAR, IMG_COMPASS, IMG_SPORTS,
-            IMG_SLEEP, IMG_ALARM, IMG_STOPWATCH,
+        ImageId alphaIcons[] = {
+            IMG_A_DIAL, IMG_A_MESSAGES, IMG_A_MUSIC,
+            IMG_A_SETTINGS, IMG_A_CAMERA, IMG_A_WEATHER,
+            IMG_A_CALENDAR, IMG_A_COMPASS, IMG_A_SPORTS,
+            IMG_A_SLEEP, IMG_A_ALARM, IMG_A_STOPWATCH,
         };
-        for (int i = 0; i < (int)(sizeof(icons)/sizeof(icons[0])); i++) {
+        for (int i = 0; i < (int)(sizeof(alphaIcons)/sizeof(alphaIcons[0])); i++) {
             int cx = kGapX + (i % kCols) * (kIconW + kGapX);
             int cy = kStartY + (i / kCols) * (kIconH + kGapY);
-            auto* iv = new ImageView(icons[i]);
+            auto* iv = new ImageView(alphaIcons[i]);
             iv->bounds().x = (int16_t)cx;
             iv->bounds().y = (int16_t)cy;
             root->addView(iv);
         }
-
     }
 
     void onResume() override {
@@ -68,146 +74,63 @@ public:
     }
 };
 
-/* VSYNC via TE rising edge (TE signal from LCD = display refresh) */
-volatile int g_vsync;
-
-/* ── TE interval measurement ──────────────────────────────────────────── */
-/* Uses DWT cycle counter @ HCLK (240 MHz → 1 tick = 4.167 ns) */
-
-#define TE_HISTORY   256           /* rolling window for average */
-#define TE_PRINT_N   128           /* print stats every N TE interrupts */
-
-static volatile uint32_t g_te_last_cyc;   /* DWT_CYCCNT at last TE */
-static volatile uint32_t g_te_delta;      /* most recent interval (cycles) */
-static volatile uint32_t g_te_sum;        /* sum of deltas in window */
-static volatile uint32_t g_te_min;        /* min delta in window */
-static volatile uint32_t g_te_max;        /* max delta in window */
-static volatile uint32_t g_te_count;      /* total TE count (wraps) */
-static volatile uint32_t g_te_window_n;   /* samples in current window */
-
-static void te_isr(uint32_t pin, void *arg)
-{
-    (void)pin; (void)arg;
-    g_vsync = 1;
-
-    uint32_t now = DWT_CYCCNT;
-    uint32_t last = g_te_last_cyc;
-    g_te_last_cyc = now;
-
-    if (last != 0U) {
-        uint32_t delta = now - last;
-        g_te_delta = delta;
-
-        if (g_te_window_n == 0U) {
-            g_te_sum = delta;
-            g_te_min = delta;
-            g_te_max = delta;
-            g_te_window_n = 1U;
-        } else if (g_te_window_n < TE_HISTORY) {
-            g_te_sum += delta;
-            if (delta < g_te_min) g_te_min = delta;
-            if (delta > g_te_max) g_te_max = delta;
-            g_te_window_n++;
-        } else {
-            /* rolling: subtract oldest approximation and add new */
-            g_te_sum = g_te_sum - (g_te_sum / TE_HISTORY) + delta;
-            if (delta < g_te_min) g_te_min = delta;
-            if (delta > g_te_max) g_te_max = delta;
-        }
-    }
-    g_te_count++;
-}
-
-static void vsync_wait(void)
-{
-    while (!g_vsync) { __asm volatile("wfi"); }
-    g_vsync = 0;
-}
-
-/* Print TE frame-rate stats. Call periodically from main loop. */
-static void te_heartbeat(void)
-{
-    static uint32_t last_print_count;
-
-    if (g_te_count - last_print_count < TE_PRINT_N) return;
-    last_print_count = g_te_count;
-
-    uint32_t n    = g_te_window_n;
-    uint32_t sum  = g_te_sum;
-    uint32_t min  = g_te_min;
-    uint32_t max  = g_te_max;
-    uint32_t clk  = clk_get_hz();
-
-    if (n == 0U) return;
-
-    uint32_t avg_cyc = sum / n;
-    /* Convert cycles → µs (× 10 for 1 decimal) */
-    uint32_t avg_us_x10 = (uint32_t)((uint64_t)avg_cyc * 10000000ULL / clk);
-    uint32_t min_us_x10 = (uint32_t)((uint64_t)min     * 10000000ULL / clk);
-    uint32_t max_us_x10 = (uint32_t)((uint64_t)max     * 10000000ULL / clk);
-    /* FPS × 10 via integer math — picolibc has no %f support */
-    uint32_t fps_x10 = (uint32_t)((uint64_t)clk * 10ULL / avg_cyc);
-
-    printf("[TE] %lu frames | avg %lu.%lu ms | min %lu.%lu max %lu.%lu | %lu.%lu fps\r\n",
-           (unsigned long)g_te_count,
-           (unsigned long)(avg_us_x10 / 10000U), (unsigned long)((avg_us_x10 / 1000U) % 10U),
-           (unsigned long)(min_us_x10 / 10000U), (unsigned long)((min_us_x10 / 1000U) % 10U),
-           (unsigned long)(max_us_x10 / 10000U), (unsigned long)((max_us_x10 / 1000U) % 10U),
-           (unsigned long)(fps_x10 / 10U), (unsigned long)(fps_x10 % 10U));
-
-    /* reset min/max for next window */
-    g_te_min = ~0U;
-    g_te_max = 0U;
-}
-
 extern "C" int main()
 {
-    printf("\r\n[litho] Gallery\r\n");
+    printf("\r\n[litho] Gallery (LCDC)\r\n");
     clk_set_hz(HCLK_240MHZ);
 
     cache_enable();
     printf("[litho] I+D Cache + MPI2 prefetch ON\r\n");
 
-    /* Select bus driver:
-     *   lcd_bus_qspi       — bit-bang QSPI, no IRQ needed
-     *   lcd_bus_qspi_lcdc  — LCDC hardware QSPI, async DMA, needs LCDC1_IRQ
-     * To switch, also change bsp/CMakeLists.txt to compile the matching .c file.
-     */
+    /* Panel init via bit-bang (proven), then hand the pixel path to LCDC. */
     lcd_set_bus(&lcd_bus_qspi);
     lcd_set_ic(&lcd_ic_co5300);
     lcd_set_geometry(LCD_WIDTH, LCD_HEIGHT);
     lcd_set_pins(LCD_RST, LCD_BL);
     lcd_init();
+    lcd_fill_color(0x0000);          /* clear via bit-bang before handoff */
+    lcdc_activate_pixel();           /* pins → LCDC, peripheral up (async DMA) */
+    printf("[litho] LCDC pixel path active\r\n");
 
-    /* Init TE stats (DWT_CYCCNT already enabled by SystemInit) */
-    g_te_min = ~0U;
-    g_te_last_cyc = 0U;
-
-    /* TE VSYNC */
-    pinMode(LCD_TE, INPUT);
-    attachInterrupt(LCD_TE, te_isr, RISING, NULL);
-    printf("[litho] VSYNC enabled on TE pin %d\r\n", LCD_TE);
-
+    /* Gallery via LithoUI PFB pipeline — tiles transferred by LCDC DMA. */
     SF32Display display;
     display.init(kScreenW, kScreenH);
     SF32Input input;
     SF32Tick  tick;
-
     WindowManager wm(display, input, tick);
     wm.initPFB(390, 50, 2);
-
     ActivityManager am(wm);
     am.registerActivity<GalleryActivity>("Gallery");
+    Intent intent;
+    intent.target = "Gallery";
+    am.startActivity(intent);
 
-    Intent i;
-    i.target = "Gallery";
-    am.startActivity(i);
+    /* Guaranteed first frame, independent of the benchmark loop. */
+    wm.invalidateAll();
+    wm.runOnce();
+    printf("[litho] first frame via LCDC\r\n");
 
-    printf("[litho] running (vsync mode)\r\n");
+    /* Free-running full-redraw loop; report whole-frame FPS via DWT. */
+    uint32_t frames = 0;
+    uint32_t t0 = DWT_CYCCNT;
     while (true) {
-        vsync_wait();
-        te_heartbeat();
+        wm.invalidateAll();
         if (!wm.runOnce()) break;
+
+        if (++frames >= 100U) {
+            uint32_t dt  = DWT_CYCCNT - t0;
+            uint32_t clk = clk_get_hz();
+            /* FPS × 10 via integer math — picolibc has no %f support */
+            uint32_t fps_x10 = (uint32_t)((uint64_t)frames * clk * 10ULL / dt);
+            printf("[litho] %lu frames | %lu.%lu fps (LCDC full redraw)\r\n",
+                   (unsigned long)frames,
+                   (unsigned long)(fps_x10 / 10U),
+                   (unsigned long)(fps_x10 % 10U));
+            frames = 0;
+            t0 = DWT_CYCCNT;
+        }
     }
+
+    while (1) { __asm volatile("wfi"); }
     return 0;
 }
