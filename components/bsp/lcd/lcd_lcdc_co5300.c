@@ -29,7 +29,8 @@
 
 #define LCDC1_IRQN             63U
 #ifndef LCDC_QSPI_FREQ_HZ
-#define LCDC_QSPI_FREQ_HZ      80000000U
+/* CO5300 QSPI 像素时钟上限（RGB565 仅 50MHz）。48MHz 实际 (240/5) 在规格内。*/
+#define LCDC_QSPI_FREQ_HZ      50000000U
 #endif
 
 static LCDC_HandleTypeDef s_lcdc;
@@ -55,18 +56,10 @@ static void dcache_clean_by_addr(const void *addr, uint32_t size)
     __asm volatile("isb" ::: "memory");
 }
 
-/* PA_PAD_OFFSET: remote SDK's SF32LB52.h has PB0-12 at PAD[0-12], PA0 at PAD[13].
- * Our SF32LB52.h has PA0 at PAD[0].  Since the LCD pins are all on PA,
- * the remote code's PAD indexing is offset by 13 relative to ours.
- * For the LCDC peripheral to work, the pins MUST be muxed to the correct
- * PAD registers — same as what the remote SDK's pinmux produces.
- *
- * We write the PAD registers directly (matching the remote's register-level
- * access) instead of going through our pinmux_config() which uses a
- * different PAD index scheme. */
-static void lcdc_pinmux(void)
+/* ── LCDC pinmux ───────────────────────────────────────────────────────── */
+
+void lcdc_pinmux(void)
 {
-    /* Our pinmux clock gate name may differ; enable it */
     pinmux_clk_enable();
 
     const uint32_t flags = PINMUX_PULL_NONE | PINMUX_DRIVE_3 | PINMUX_INPUT_ENABLE;
@@ -75,18 +68,24 @@ static void lcdc_pinmux(void)
                              PINMUX_SLEW_SLOW | PINMUX_DRIVE_Msk);
     cfg |= (1U << PINMUX_FSEL_Pos) & PINMUX_FSEL_Msk;  /* fsel=1 → LCDC */
 
-    /* Write PAD registers using the SAME indices as the remote SDK.
-     * The remote SDK's lcdc_pinmux_pa() uses PA_PAD_OFFSET=13,
-     * meaning it writes to PAD[13+pin].  We replicate that exactly. */
-    enum { PA_PAD_OFFSET = 13U };
-    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + LCD_TE ].R = cfg;
-    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + LCD_CS ].R = cfg;
-    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + LCD_CLK].R = cfg;
-    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + LCD_D0 ].R = cfg;
-    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + LCD_D1 ].R = cfg;
-    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + LCD_D2 ].R = cfg;
-    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + LCD_D3 ].R = cfg;
+#define LCDC_WRITE_PAD(pin) do {                              \
+    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + (pin)].R = cfg;        \
+    __asm volatile("dsb" ::: "memory");                       \
+    (void)HPSYS_PINMUX->PAD[PA_PAD_OFFSET + (pin)].R;        \
+} while(0)
+
+    LCDC_WRITE_PAD(LCD_TE);
+    LCDC_WRITE_PAD(LCD_CS);
+    LCDC_WRITE_PAD(LCD_CLK);
+    LCDC_WRITE_PAD(LCD_D0);
+    LCDC_WRITE_PAD(LCD_D1);
+    LCDC_WRITE_PAD(LCD_D2);
+    LCDC_WRITE_PAD(LCD_D3);
+
+#undef LCDC_WRITE_PAD
 }
+
+/* ── LCDC register I/O ──────────────────────────────────────────────────── */
 
 static void lcdc_write_reg(uint16_t reg, const uint8_t *data, uint32_t len)
 {
@@ -121,6 +120,8 @@ static void lcdc_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
     lcdc_write_reg(REG_RASET, p, sizeof p);
 }
 
+/* ── LCD init ──────────────────────────────────────────────────────────── */
+
 static void lcdc_clear_black_raw(void)
 {
     uint32_t cmd = ((uint32_t)LCDC_SPI_WRITE_CMD << 24) | ((uint32_t)REG_WRITE_RAM << 8);
@@ -153,8 +154,6 @@ void LCDC1_IRQHandler(void)
     HAL_LCDC_IRQHandler(&s_lcdc);
 }
 
-/* Minimal activation: switch pins to LCDC + init LCDC peripheral only.
- * Call after bit-bang LCD init. Does NOT reset or reconfigure the LCD panel. */
 void lcdc_activate_pixel(void)
 {
     memset(&s_lcdc, 0, sizeof s_lcdc);
@@ -246,6 +245,8 @@ int lcd_lcdc_co5300_init(void)
     return 0;
 }
 
+/* ── Bitblt ────────────────────────────────────────────────────────────── */
+
 void lcd_lcdc_co5300_wait_idle(void)
 {
     while (s_busy) {
@@ -273,17 +274,9 @@ void lcd_lcdc_co5300_bitblt_async(uint16_t x, uint16_t y,
     HAL_LCDC_SetBgColor(&s_lcdc, 0, 0, 0);
     lcdc_set_window(x, y, (uint16_t)(x + w - 1U), (uint16_t)(y + h - 1U));
     HAL_LCDC_LayerEnable(&s_lcdc, HAL_LCDC_LAYER_DEFAULT);
-    /* RGB565 has no per-pixel alpha — global layer alpha at 255 is REQUIRED to
-     * make the layer opaque (ALPHA_SEL=0 would treat it as fully transparent
-     * → black screen). */
     HAL_LCDC_LayerEnableAlpha(&s_lcdc, HAL_LCDC_LAYER_DEFAULT, 255);
     dcache_clean_by_addr(rgb565, (uint32_t)w * (uint32_t)h * sizeof(uint16_t));
     HAL_LCDC_LayerSetFormat(&s_lcdc, HAL_LCDC_LAYER_DEFAULT, LCDC_PIXEL_FORMAT_RGB565);
-    /* Source buffer is packed w*h: stride = w pixels.  MUST use the Ext form
-     * (or INVALID_TOTAL_WIDTH): plain LayerSetData leaves total_width at the
-     * memset-0 value, and the HAL treats 0 != INVALID_TOTAL_WIDTH as a literal
-     * stride of 0 → every output row refetches source row 0 → white vertical
-     * stripes / smeared image. */
     HAL_LCDC_LayerSetDataExt(&s_lcdc, HAL_LCDC_LAYER_DEFAULT, (uint8_t *)rgb565,
                              x, y, (uint16_t)(x + w - 1U), (uint16_t)(y + h - 1U), w);
 

@@ -392,13 +392,6 @@ public:
             return;
         }
 
-        // Fallback: unsupported format → fill magenta
-        uint16_t* tile = mTile->buffer();
-        int tStride = mTile->stride();
-        for (int y = 0; y < copyH; y++) {
-            uint16_t* row = tile + (ty0 + y) * tStride + tx0;
-            for (int x = 0; x < copyW; x++) row[x] = 0xF81F;
-        }
     }
 
     // ── drawImageRotated (deci-degree core) ───────────────────────

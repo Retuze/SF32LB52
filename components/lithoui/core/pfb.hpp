@@ -74,8 +74,9 @@ public:
     //   3. Call `draw(painter, bx, by, bw, bh)` — client draws the view tree
     //   4. bitblt the tile to the display
     //   5. Release the tile back to the pool
-    template<typename Display, typename DrawFn>
-    void drawRegion(const Region& region, Display& display, DrawFn&& draw) {
+    template<typename Display, typename DrawFn, typename IdleFn>
+    void drawRegion(const Region& region, Display& display, DrawFn&& draw,
+                    IdleFn&& onIdle) {
         int c0 = region.x / mBlockW;
         int r0 = region.y / mBlockH;
         int c1 = (region.x + region.width  + mBlockW  - 1) / mBlockW;
@@ -179,6 +180,11 @@ public:
                 mStatTiles++;
             }
         }
+
+        // Run caller-supplied work (e.g. sampling touch over slow bit-bang I2C)
+        // while the last tile's DMA is still in flight, so it overlaps the
+        // transfer instead of adding serial time to the frame. Then drain.
+        onIdle();
 
         // Drain remaining async xfers
         display.waitReady();

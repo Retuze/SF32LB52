@@ -3,5 +3,8 @@
     .globl _binary_res_images_bin_end
     .balign 4
 _binary_res_images_bin_start:
-    .incbin "E:/SF32/SF32LB52/components/lithoui/generated/res_images.bin"
+    /* Relative path — resolved via the assembler -I include dir
+     * (components/lithoui/generated, added in CMakeLists.txt).
+     * Must NOT be an absolute machine-specific path. */
+    .incbin "res_images.bin"
 _binary_res_images_bin_end:

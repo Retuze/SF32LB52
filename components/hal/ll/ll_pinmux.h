@@ -38,6 +38,14 @@ extern "C" {
 #define PINMUX_DRIVE_2        (2UL << PINMUX_DRIVE_Pos)
 #define PINMUX_DRIVE_3        (3UL << PINMUX_DRIVE_Pos)
 
+/* ── Pad offset ──────────────────────────────────────────────────────────
+
+ * SF32LB52 has 13 SA (SiP flash) pads at PAD[0..12].  General-purpose PA
+ * pins start at PAD[13].  The public API uses logical PA pin numbers (0..);
+ * pinmux_config() internally adds this offset to target the correct physical
+ * pad register. */
+#define PA_PAD_OFFSET 13U
+
 /* ── API ───────────────────────────────────────────────────────────────── */
 
 void pinmux_clk_enable(void);

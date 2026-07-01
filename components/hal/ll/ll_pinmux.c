@@ -14,7 +14,9 @@ void pinmux_clk_enable(void)
 
 void pinmux_config(uint32_t pad, uint32_t fsel, uint32_t flags)
 {
-    if (pad >= HPSYS_PINMUX_PAD_COUNT) return;
+    /* Logical PA pin → physical PAD index (skip 13 SA pads at PAD[0..12]) */
+    uint32_t pidx = pad + PA_PAD_OFFSET;
+    if (pidx >= HPSYS_PINMUX_PAD_COUNT) return;
 
     pinmux_clk_enable();
 
@@ -23,5 +25,9 @@ void pinmux_config(uint32_t pad, uint32_t fsel, uint32_t flags)
                              PINMUX_SLEW_SLOW | PINMUX_DRIVE_Msk);
     cfg |= (fsel << PINMUX_FSEL_Pos) & PINMUX_FSEL_Msk;
 
-    HPSYS_PINMUX->PAD[pad].R = cfg;
+    HPSYS_PINMUX->PAD[pidx].R = cfg;
+
+    /* DSB + dummy read-back prevents adjacent-PAD glitch on SF32LB52 */
+    __asm volatile("dsb" ::: "memory");
+    (void)HPSYS_PINMUX->PAD[pidx].R;
 }

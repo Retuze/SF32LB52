@@ -10,6 +10,8 @@ extern "C" {
 
 int  lcd_lcdc_co5300_init(void);
 void lcdc_activate_pixel(void);  /* pinmux + LCDC init only, no panel reset */
+void lcdc_pinmux(void);           /* re-apply LCD pinmux */
+
 void lcd_lcdc_co5300_bitblt(uint16_t x, uint16_t y,
                             uint16_t w, uint16_t h,
                             const uint16_t *rgb565);

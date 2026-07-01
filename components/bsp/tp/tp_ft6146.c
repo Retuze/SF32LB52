@@ -123,7 +123,11 @@ void tp_ft6146_init(tp_ft6146_t *tp)
 
 int tp_ft6146_read(tp_ft6146_t *tp, int *out_x, int *out_y, int *out_event)
 {
-    uint8_t buf[2U + 6U * TP_FT6146_MAX_POINTS] = {0};
+    /* Only point-1 registers are parsed below: TD_STATUS (0x02) + P1 X/Y
+     * (0x03..0x06), i.e. buf[1..5] of a bulk read starting at 0x01.  Read just
+     * these 6 bytes instead of the full 2 + 6*MAX_POINTS block — it roughly
+     * halves the bit-bang I2C transfer, which sits on the per-frame input path. */
+    uint8_t buf[6] = {0};
     int ret;
 
     ret = read_regs(tp, FT_REG_BULK_READ, buf, sizeof(buf));
@@ -133,29 +137,42 @@ int tp_ft6146_read(tp_ft6146_t *tp, int *out_x, int *out_y, int *out_event)
 
     uint8_t touch_num = buf[1] & 0x0FU;
 
-    if (touch_num == 0) {
-        /* No finger — report UP at last known position */
-        int x = (int)((buf[2] & 0x0FU) << 8) | (int)buf[3];
-        int y = (int)((buf[4] & 0x0FU) << 8) | (int)buf[5];
+    /* Track touch state across calls — FT6146's event_flag is only valid
+     * for the hardware's internal 100 Hz scan; by the time pollEvent()
+     * reads (~18 ms later) the flag may have already advanced from DOWN
+     * to MOVE.  We synthesize DOWN / UP from touch_num transitions. */
+    static uint8_t prev_touch;
 
-        *out_event = TP_EVENT_UP;
-        *out_x = (int)tp->max_x - x;
-        *out_y = (int)tp->max_y - y;
-        return 0;
+    if (touch_num == 0) {
+        if (prev_touch) {
+            int x = (int)((buf[2] & 0x0FU) << 8) | (int)buf[3];
+            int y = (int)((buf[4] & 0x0FU) << 8) | (int)buf[5];
+            *out_event = TP_EVENT_UP;
+            *out_x = x;          /* raw is already screen-aligned — no mirror */
+            *out_y = y;
+            prev_touch = 0;
+            return 0;
+        }
+        return -1;  /* no touch and wasn't touching — no event */
     }
 
     if (touch_num > TP_FT6146_MAX_POINTS) {
         touch_num = TP_FT6146_MAX_POINTS;
     }
 
-    /* Report first touch point */
-    uint8_t event_flag = (buf[2] >> 6) & 0x03U;
     int x = (int)((buf[2] & 0x0FU) << 8) | (int)buf[3];
     int y = (int)((buf[4] & 0x0FU) << 8) | (int)buf[5];
 
-    *out_event = (int)event_flag;  /* hardware encoding matches TP_EVENT_* enum */
-    *out_x = tp->max_x - x;
-    *out_y = tp->max_y - y;
+    if (!prev_touch) {
+        *out_event = TP_EVENT_DOWN;   /* transition 0→1: synthesize DOWN */
+    } else {
+        uint8_t event_flag = (buf[2] >> 6) & 0x03U;
+        *out_event = (event_flag == TP_EVENT_UP) ? TP_EVENT_UP : TP_EVENT_MOVE;
+    }
+
+    *out_x = x;                       /* raw is already screen-aligned — no mirror */
+    *out_y = y;
+    prev_touch = (touch_num > 0) ? 1 : 0;
 
     return 0;
 }

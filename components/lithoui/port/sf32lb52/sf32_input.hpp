@@ -7,10 +7,14 @@ extern "C" {
 #include "lcd.h"
 }
 
-/* ~1.25µs delay for 400kHz I2C at 240MHz */
+/* I2C half-period delay. The 80-nop loop measured ~125 kHz effective bus
+ * (each bit = 2 half-periods + GPIO pinMode toggling). FT6146 supports 400 kHz
+ * and SDA/SCL rise time (external pull-up) is only a few hundred ns, so halving
+ * the delay to ~250 kHz keeps comfortable signal-integrity margin while cutting
+ * the read time that lands on the per-frame input path. */
 static void i2c_delay(void)
 {
-    for (volatile uint32_t i = 0U; i < 80U; ++i) {
+    for (volatile uint32_t i = 0U; i < 40U; ++i) {
         __asm volatile("nop");
     }
 }
@@ -36,16 +40,6 @@ public:
 
         int x, y, ev;
         if (tp_ft6146_read(&tp_, &x, &y, &ev) != 0) return false;
-
-        const char *act;
-        switch (ev) {
-        case TP_EVENT_DOWN: act = "DN"; break;
-        case TP_EVENT_UP:   act = "UP"; break;
-        case TP_EVENT_MOVE: act = "MV"; break;
-        default:            act = "??"; break;
-        }
-        printf("[TP] #%lu %s (%d,%d)\r\n",
-               (unsigned long)g_tp_irq_cnt, act, x, y);
 
         out.type = EventType::TOUCH;
         out.touch.x      = x;

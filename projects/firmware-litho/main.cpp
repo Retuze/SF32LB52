@@ -1,10 +1,6 @@
 /**
  * @file main.cpp
  * @brief LithoUI SF32LB52 demo — icon grid, rendered via hardware LCDC QSPI.
- *
- * Panel is brought up over the bit-bang bus (proven init path), then the
- * pixel transport is handed to the LCDC peripheral (async DMA).  The PFB
- * tile pipeline (pool=2) draws tile N+1 while LCDC transmits tile N.
  */
 
 extern "C" {
@@ -34,23 +30,59 @@ using namespace litho;
 static const int kScreenW = LCD_WIDTH;
 static const int kScreenH = LCD_HEIGHT;
 
+/* ScrollableRoot — intercept touch to scroll icon container vertically. */
+class ScrollableRoot : public ViewGroup {
+public:
+    void setScrollTarget(ViewGroup* t) { mTarget = t; }
+
+    bool dispatchTouchEvent(TouchEvent& ev, int sx, int sy) override {
+        if (!mTarget) return false;
+
+        if (ev.action == TouchAction::DOWN) {
+            mLastY = ev.y;
+            mTracking = true;
+            ev.handler   = this;
+            ev.handlerSX = sx;
+            ev.handlerSY = sy;
+            return true;
+        }
+        if (ev.action == TouchAction::MOVE && mTracking) {
+            int dy = ev.y - mLastY;
+            mLastY  = ev.y;
+            mScroll += dy;
+            mTarget->setTranslationY((int16_t)mScroll);
+            return true;
+        }
+        if (ev.action == TouchAction::UP) {
+            mTracking = false;
+            return true;
+        }
+        return false;
+    }
+
+private:
+    ViewGroup* mTarget = nullptr;
+    int mLastY  = 0;
+    int mScroll = 0;
+    bool mTracking = false;
+};
+
 class GalleryActivity : public Activity {
 public:
     void onCreate(Bundle&) override {
-        auto* root = new ViewGroup();
+        auto* root = new ScrollableRoot();
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
 
-        // Background: 360x360 cartoon (PAL8 raw, opaque)
-        auto* bg = new ImageView(IMG_03);
-        bg->bounds().x = (int16_t)((kScreenW - 360) / 2);
-        bg->bounds().y = (int16_t)((kScreenH - 360) / 2);
-        root->addView(bg);
-
-        // 12 alpha icons overlaid in 3×4 grid
         static const int kCols = 3, kIconW = 100, kIconH = 100;
         static const int kGapX = (kScreenW - kCols * kIconW) / (kCols + 1);
         static const int kGapY = 15, kStartY = 40;
+        static const int kBoxH = kStartY + 4 * (kIconH + kGapY) + 100;
+
+        auto* iconBox = new ViewGroup();
+        iconBox->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kBoxH};
+        root->addView(iconBox);
+        root->setScrollTarget(iconBox);
 
         ImageId alphaIcons[] = {
             IMG_A_DIAL, IMG_A_MESSAGES, IMG_A_MUSIC,
@@ -64,7 +96,7 @@ public:
             auto* iv = new ImageView(alphaIcons[i]);
             iv->bounds().x = (int16_t)cx;
             iv->bounds().y = (int16_t)cy;
-            root->addView(iv);
+            iconBox->addView(iv);
         }
     }
 
@@ -82,55 +114,33 @@ extern "C" int main()
     cache_enable();
     printf("[litho] I+D Cache + MPI2 prefetch ON\r\n");
 
-    /* Panel init via bit-bang (proven), then hand the pixel path to LCDC. */
+    SF32Input input;  /* touch init before LCDC — avoids pinmux conflict */
+
     lcd_set_bus(&lcd_bus_qspi);
     lcd_set_ic(&lcd_ic_co5300);
     lcd_set_geometry(LCD_WIDTH, LCD_HEIGHT);
     lcd_set_pins(LCD_RST, LCD_BL);
     lcd_init();
-    lcd_fill_color(0x0000);          /* clear via bit-bang before handoff */
-    lcdc_activate_pixel();           /* pins → LCDC, peripheral up (async DMA) */
+    lcd_fill_color(0x0000);
+    lcdc_activate_pixel();
     printf("[litho] LCDC pixel path active\r\n");
 
-    /* Gallery via LithoUI PFB pipeline — tiles transferred by LCDC DMA. */
     SF32Display display;
     display.init(kScreenW, kScreenH);
-    SF32Input input;
     SF32Tick  tick;
     WindowManager wm(display, input, tick);
     wm.initPFB(390, 50, 2);
+
     ActivityManager am(wm);
     am.registerActivity<GalleryActivity>("Gallery");
     Intent intent;
     intent.target = "Gallery";
     am.startActivity(intent);
 
-    /* Guaranteed first frame, independent of the benchmark loop. */
-    wm.invalidateAll();
-    wm.runOnce();
-    printf("[litho] first frame via LCDC\r\n");
-
-    /* Free-running full-redraw loop; report whole-frame FPS via DWT. */
-    uint32_t frames = 0;
-    uint32_t t0 = DWT_CYCCNT;
     while (true) {
         wm.invalidateAll();
-        if (!wm.runOnce()) break;
-
-        if (++frames >= 100U) {
-            uint32_t dt  = DWT_CYCCNT - t0;
-            uint32_t clk = clk_get_hz();
-            /* FPS × 10 via integer math — picolibc has no %f support */
-            uint32_t fps_x10 = (uint32_t)((uint64_t)frames * clk * 10ULL / dt);
-            printf("[litho] %lu frames | %lu.%lu fps (LCDC full redraw)\r\n",
-                   (unsigned long)frames,
-                   (unsigned long)(fps_x10 / 10U),
-                   (unsigned long)(fps_x10 % 10U));
-            frames = 0;
-            t0 = DWT_CYCCNT;
-        }
+        wm.runOnce();
     }
 
-    while (1) { __asm volatile("wfi"); }
     return 0;
 }
