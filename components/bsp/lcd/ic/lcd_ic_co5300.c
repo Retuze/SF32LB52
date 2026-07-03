@@ -55,6 +55,15 @@ static int co5300_init(const lcd_bus_t *b)
     ic_write(b,0x2A, (const uint8_t*)"\x00\x00\x01\x86", 4);
     ic_write(b,0x2B, (const uint8_t*)"\x00\x00\x01\xC2", 4);
 
+    /* Read panel ID before sleep-out in case the panel needs it */
+    {
+        uint8_t id[3] = {0};
+        b->begin();
+        b->cmd_read(0x04, id, 3);
+        b->end();
+        printf("[co5300] ID: %02X %02X %02X\n", id[0], id[1], id[2]);
+    }
+
     ic_write(b,0x11, NULL, 0);
     delay(120);
     ic_write(b,0x29, NULL, 0);
@@ -85,7 +94,7 @@ static uint32_t co5300_read_id(const lcd_bus_t *b)
     return ((uint32_t)id[0] << 16) | ((uint32_t)id[1] << 8) | id[2];
 }
 
-const lcd_ic_t lcd_ic_co5300 = {
+const lcd_ic_t lcd_ic_default = {
     .name       = "CO5300",
     .init       = co5300_init,
     .set_window = co5300_set_window,

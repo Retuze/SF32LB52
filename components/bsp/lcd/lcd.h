@@ -61,6 +61,7 @@ void lcd_set_geometry(uint16_t w, uint16_t h);
 /* ── Public API ──────────────────────────────────────────────────────── */
 
 int      lcd_init(void);
+void     lcd_bus_init(void);  /* weak — overridden by bus driver for post-init */
 void     lcd_sleep(int on);
 uint32_t lcd_read_id(void);
 
@@ -79,11 +80,15 @@ void lcd_wait_idle(void);
 uint32_t lcd_xfer_cycles(void);
 void     lcd_clear_xfer_cycles(void);
 
-/* ── Available instances ─────────────────────────────────────────────── */
+/* TE frame sync — weak defaults: GPIO EXTI on LCD_TE pin */
+void lcd_te_init(void);
+void lcd_te_wait(void);
+int  lcd_te_late_count(void);  /* TE fired while xfer was busy → tearing */
 
-extern const lcd_bus_t lcd_bus_qspi;
-extern const lcd_bus_t lcd_bus_qspi_lcdc;
-extern const lcd_ic_t  lcd_ic_co5300;
+/* ── Default instances (defined by bus / IC drivers) ──────────────────── */
+
+extern const lcd_bus_t lcd_bus_default;
+extern const lcd_ic_t  lcd_ic_default;
 
 #ifdef __cplusplus
 }

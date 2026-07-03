@@ -1,10 +1,9 @@
 /**
- * @file lcd_bus_qspi.c
- * @brief QSPI bit-bang transport (CLK + D0-D3 + CS).
+ * @file lcd_bus_qspi_gpio.c
+ * @brief QSPI bit-bang transport via GPIO (CLK + D0-D3 + CS).
  *
- * Exports lcd_bus_qspi (vtable) for IC driver access, plus
- * lcd_bus_write_pixels / lcd_bus_fill_pixels (direct calls)
- * for lcd.c's drawing hot path.
+ * Defines lcd_bus_default for IC register access (slow path, digitalWrite)
+ * and lcd_send / lcd_fill for pixel data (fast path, direct GPIO registers).
  */
 
 #include "lcd.h"
@@ -12,9 +11,7 @@
 #include "board.h"
 #include "hal.h"
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Slow path — single-line via digitalWrite
- * ═══════════════════════════════════════════════════════════════════════ */
+/* ── Slow path — register I/O via digitalWrite ────────────────────────── */
 
 static void qspi_init(void)
 {
@@ -86,7 +83,9 @@ static void qspi_cmd_read(uint8_t cmd, uint8_t *data, uint32_t data_len)
     }
 }
 
-const lcd_bus_t lcd_bus_qspi = {
+/* ── Bus vtable ───────────────────────────────────────────────────────── */
+
+const lcd_bus_t lcd_bus_default = {
     .init      = qspi_init,
     .begin     = qspi_begin,
     .end       = qspi_end,
@@ -94,9 +93,7 @@ const lcd_bus_t lcd_bus_qspi = {
     .cmd_read  = qspi_cmd_read,
 };
 
-/* ═══════════════════════════════════════════════════════════════════════
- * Fast pixel output — called by lcd.c via extern convention
- * ═══════════════════════════════════════════════════════════════════════ */
+/* ── Fast path — pixel output via direct GPIO registers ───────────────── */
 
 _Static_assert(LCD_D1 == LCD_D0 + 1 && LCD_D2 == LCD_D0 + 2 &&
                LCD_D3 == LCD_D0 + 3 && LCD_D0 >= 4,

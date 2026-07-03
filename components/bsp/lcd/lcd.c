@@ -4,12 +4,13 @@
  */
 
 #include "lcd.h"
+#include "board.h"
 #include "hal.h"
+#include "ll_gpio.h"
 
 /* Bus provides these by convention — any bus implementation exports them.
  * QSPI bus: ramwr uses 0x12 framing, push uses direct GPIO registers.
  * SPI bus:  ramwr uses DC pin, push uses SPI single-line. */
-/* Bus provides pixel output by convention — one function per shape. */
 extern void lcd_send(const uint16_t *pixels, uint32_t n);
 extern void lcd_fill(uint16_t color, uint32_t n);
 
@@ -46,7 +47,16 @@ int lcd_init(void)
         pinMode(g.pin_bl, OUTPUT);
         digitalWrite(g.pin_bl, HIGH);
     }
-    return g.ic->init(g.bus);
+    int r = g.ic->init(g.bus);
+
+    /* Clear screen before bus post-init — after lcd_bus_init() the pins may
+     * be in hardware mode (LCDC) and bit-bang no longer works. */
+    lcd_fill_color(0x0000);
+
+    lcd_te_init();      /* TE vsync after panel init */
+    lcd_bus_init();     /* optional bus post-init (e.g. LCDC DMA) */
+
+    return r;
 }
 
 void lcd_sleep(int on)    { if (g.ic->sleep) g.ic->sleep(g.bus, on); }
@@ -92,6 +102,11 @@ void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *
     lcd_send(rgb565, (uint32_t)w * (uint32_t)h);
 }
 
+/* ── Bus post-init (weak default — overridden by e.g. LCDC driver) ────────── */
+
+__attribute__((weak))
+void lcd_bus_init(void) {}
+
 /* ── Async bitblt (weak defaults — overridden by LCDC bus driver) ────────── */
 
 __attribute__((weak))
@@ -112,4 +127,41 @@ uint32_t lcd_xfer_cycles(void) { return 0; }
 
 __attribute__((weak))
 void lcd_clear_xfer_cycles(void) {}
+
+/* ── TE frame sync ──────────────────────────────────────────────────────── */
+
+static volatile int s_te_flag = 0;
+static volatile int s_te_late = 0;   /* TE fired while xfer still busy */
+
+__attribute__((weak))
+int lcd_is_busy(void) { return 0; }
+
+static void te_irq_handler(uint32_t pin, void *arg)
+{
+    (void)pin; (void)arg;
+    s_te_flag = 1;
+    if (lcd_is_busy()) s_te_late = 1;
+}
+
+int lcd_te_late_count(void)
+{
+    int n = s_te_late;
+    s_te_late = 0;
+    return n;
+}
+
+__attribute__((weak))
+void lcd_te_init(void)
+{
+    pinMode(LCD_TE, INPUT_PULLUP);
+    attachInterrupt(LCD_TE, te_irq_handler, RISING, NULL);
+}
+
+__attribute__((weak))
+void lcd_te_wait(void)
+{
+    s_te_flag = 0;
+    while (!s_te_flag) { /* spin */ }
+    s_te_flag = 0;
+}
 

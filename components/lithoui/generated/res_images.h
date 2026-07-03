@@ -34,40 +34,45 @@ typedef enum ImageId {
     IMG_A_MAP_NAVIGATION = 25,
     IMG_A_MESSAGES = 26,
     IMG_A_MUSIC = 27,
-    IMG_A_SETTINGS = 28,
-    IMG_A_SHUTDWON = 29,
-    IMG_A_SLEEP = 30,
-    IMG_A_SOS = 31,
-    IMG_A_SPORTS = 32,
-    IMG_A_STOPWATCH = 33,
-    IMG_A_STRESS = 34,
-    IMG_A_TEST = 35,
-    IMG_A_TIMER = 36,
-    IMG_A_VIDEO_CONTROL = 37,
-    IMG_A_VOICE_ASSISTANT = 38,
-    IMG_A_WEATHER = 39,
-    IMG_R_MIN = 40,
-    IMG_R_SEC = 41,
-    IMG_R_TEST = 42,
+    IMG_R_MIN = 28,
+    IMG_R_SEC = 29,
+    IMG_R_TEST = 30,
+    IMG_A_SETTINGS = 31,
+    IMG_A_SHUTDWON = 32,
+    IMG_A_SLEEP = 33,
+    IMG_A_SOS = 34,
+    IMG_A_SPORTS = 35,
+    IMG_A_STOPWATCH = 36,
+    IMG_A_STRESS = 37,
+    IMG_A_TEST = 38,
+    IMG_A_TIMER = 39,
+    IMG_A_VIDEO_CONTROL = 40,
+    IMG_A_VOICE_ASSISTANT = 41,
+    IMG_A_WEATHER = 42,
     IMG_COUNT = 43
 } ImageId;
 
 enum ImageFormat {
-    FMT_A8              = 0,  // grayscale raw
-    FMT_A8_RLE          = 1,  // grayscale + RLE
-    FMT_PAL8            = 2,  // 256-color palette + raw index
-    FMT_PAL8_RLE        = 3,  // 256-color palette + RLE
-    FMT_PAL8_ALPHA      = 4,  // 256-color palette + raw index + raw alpha
-    FMT_PAL8_ALPHA_RLE  = 5,  // 256-color palette + RLE with inline alpha
-    FMT_RGB565_RLE      = 6,  // raw RGB565 + RLE (direct color, no palette)
+    FMT_A8_RLE          = 0,  // grayscale RLE, tint coloring, opaque
+    FMT_PAL_RLE         = 1,  // palette RLE, RGB565 palette, opaque
+    FMT_PAL_ALPHA_RLE   = 2,  // palette RLE, RGB565 palette, alpha inline
+    FMT_RGB565_RLE      = 3,  // direct color RLE, opaque
+    FMT_RGB565A_RLE     = 4,  // direct color RLE, alpha inline
 };
+
+// formatInfo byte: bits 2:0 = format enum, bits 7:3 = paletteBits
+// paletteBits = 0 ¡ú no palette; 1..8 ¡ú 2^N palette entries (RGB565 each)
+#define LITHO_FORMAT(info)       ((info) & 0x07)
+#define LITHO_PALETTE_BITS(info) (((info) >> 3) & 0x1F)
+#define LITHO_PALETTE_SIZE(info) (LITHO_PALETTE_BITS(info) ? (1 << LITHO_PALETTE_BITS(info)) : 0)
 
 #pragma pack(push, 1)
 typedef struct ImageEntry {
     uint16_t id;
     uint16_t width;
     uint16_t height;
-    uint16_t format;
+    uint8_t  formatInfo;   // format + paletteBits (see macros above)
+    uint8_t  reserved;
     uint32_t offset;
     uint32_t size;
 } ImageEntry;
@@ -101,6 +106,17 @@ static inline const ImageEntry* imageEntry(ImageId id) {
 }
 static inline const void* imagePixels(ImageId id) {
     return (const void*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
+}
+// Palette pointer for FMT_PAL_RLE / FMT_PAL_ALPHA_RLE.
+// Palette is stored at the beginning of the data chunk, before the RLE stream.
+static inline const uint16_t* imagePalette(ImageId id) {
+    int palBits = LITHO_PALETTE_BITS(imageEntry(id)->formatInfo);
+    return (palBits > 0) ? (const uint16_t*)imagePixels(id) : nullptr;
+}
+// Byte offset from pixel data start to the RLE row-offset table
+// (skips the variable-size palette).
+static inline uint32_t imageRleOffset(ImageId id) {
+    return (uint32_t)LITHO_PALETTE_SIZE(imageEntry(id)->formatInfo) * 2;
 }
 
 // Access the sin table embedded in the resource bundle.

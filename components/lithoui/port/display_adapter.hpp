@@ -24,6 +24,9 @@ public:
     /** Busy-wait until async xfer completes. */
     virtual void waitReady() {}
 
+    /** Wait for next TE (vsync) signal. Default: no-op (no TE). */
+    virtual void waitTE() {}
+
     virtual void flush() = 0;
 
     virtual int width()  const = 0;

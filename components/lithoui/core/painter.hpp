@@ -9,12 +9,46 @@
 #endif
 
 // Image formats — defined in res_images.h:
-//   FMT_A8 = 0 (raw)    FMT_A8_RLE = 1       grayscale ±RLE
-//   FMT_PAL8 = 2 (raw)  FMT_PAL8_RLE = 3     palette ±RLE
-//   FMT_PAL8_ALPHA = 4 (raw)  FMT_PAL8_ALPHA_RLE = 5   palette+alpha ±RLE
+//   FMT_A8_RLE = 0        grayscale RLE, tint coloring, opaque
+//   FMT_PAL_RLE = 1        palette RLE, RGB565 palette, opaque
+//   FMT_PAL_ALPHA_RLE = 2  palette RLE, alpha inline in RLE stream
+//   FMT_RGB565_RLE = 3     direct color RLE, opaque
+//   FMT_RGB565A_RLE = 4    direct color RLE, alpha inline in RLE stream
+//
+// The `fmt` parameter carries formatInfo: bits 2:0 = format enum, bits 7:3 = paletteBits.
+// Use LITHO_FORMAT(fmt) and LITHO_PALETTE_BITS(fmt) macros from res_images.h.
 
-// Alpha level → actual alpha value (for FMT_PAL8_RLE_ALPHA, 2 bits → 4 levels)
-static const uint8_t kAlphaLevels[4] = {0, 85, 170, 255};
+// TT field (bits7:6 of alpha-format head byte) → actual alpha value
+//   TT=00 → alpha=0   (fully transparent, 1-byte record)
+//   TT=01 → alpha=255 (opaque, head + color data)
+//   TT=10 → alpha=85  (semi-transparent)
+//   TT=11 → alpha=170 (semi-transparent)
+static const uint8_t kTTAlpha[4] = {0, 255, 85, 170};
+
+// ── Shared inline helpers ─────────────────────────────────────────
+
+// Alpha-blend a source RGB565 pixel onto a destination pixel.
+// alpha: 0 = fully transparent (dst unchanged), 255 = fully opaque (src replaces dst)
+static inline uint16_t blend565(uint16_t src, uint16_t dst, uint32_t alpha) {
+    uint32_t ia = 255 - alpha;
+    uint16_t r = (uint16_t)((((src >> 11) & 0x1F) * alpha + ((dst >> 11) & 0x1F) * ia) / 255) << 11;
+    uint16_t g = (uint16_t)((((src >> 5)  & 0x3F) * alpha + ((dst >> 5)  & 0x3F) * ia) / 255) << 5;
+    uint16_t b = (uint16_t)((( src        & 0x1F) * alpha + ( dst        & 0x1F) * ia) / 255);
+    return r | g | b;
+}
+
+// Fast 32-bit word fill of a uint16_t pixel buffer.
+// Aligns to 4-byte boundary if needed, then writes pairs of pixels as uint32_t.
+// Updates dp and cnt in-place (may advance by 1 for alignment).
+static inline void wordFill32(uint16_t*& dp, int& cnt, uint16_t color) {
+    if (cnt <= 0) return;
+    if ((uintptr_t)dp & 3) { *dp++ = color; --cnt; }
+    uint32_t c32 = ((uint32_t)color << 16) | color;
+    uint32_t* d4 = (uint32_t*)dp;
+    int wc = cnt >> 1;
+    for (int i = 0; i < wc; i++) d4[i] = c32;
+    if (cnt & 1) dp[cnt - 1] = color;
+}
 
 namespace litho {
 
@@ -114,8 +148,10 @@ public:
     __attribute__((noinline, section(".ramfunc")))
     void drawImage(const void* src, int fmt,
                    int srcW, int srcH, int dx, int dy,
-                   const uint8_t* mask = nullptr,
                    const RGB565* tint = nullptr) {
+
+        int imageFormat = LITHO_FORMAT(fmt);
+        int paletteSize = LITHO_PALETTE_SIZE(fmt);
 
         int sx0 = dx + mScreenX;
         int sy0 = dy + mScreenY;
@@ -142,44 +178,13 @@ public:
         int srcOffX = sx0 - (dx + mScreenX);
         int srcOffY = sy0 - (dy + mScreenY);
 
-        (void)mask;  // alpha is inline in RLE stream for new formats
-
-        // ── FMT_A8 (0): grayscale raw ───────────────────────────
-        if (fmt == 0) {
-            const uint8_t* gray = (const uint8_t*)src;
-            uint16_t* tile = mTile->buffer();
-            int tStride = mTile->stride();
-            uint16_t tintLut[256];
-            if (tint) {
-                uint32_t tr = (tint->value >> 11) & 0x1F;
-                uint32_t tg = (tint->value >> 5)  & 0x3F;
-                uint32_t tb =  tint->value        & 0x1F;
-                for (int i = 0; i < 256; i++) {
-                    uint32_t r = (tr * i) / 255, g = (tg * i) / 255, b = (tb * i) / 255;
-                    if (r > 0x1F) r = 0x1F; if (g > 0x3F) g = 0x3F; if (b > 0x1F) b = 0x1F;
-                    tintLut[i] = (uint16_t)((r << 11) | (g << 5) | b);
-                }
-            }
-            for (int y = 0; y < copyH; y++) {
-                const uint8_t* srow = gray + (srcOffY + y) * srcW + srcOffX;
-                uint16_t* drow = tile + (ty0 + y) * tStride + tx0;
-                for (int x = 0; x < copyW; x++) {
-                    uint8_t g = srow[x];
-                    drow[x] = tint ? tintLut[g]
-                         : (uint16_t)(((g >> 3) & 0x1F) << 11 | ((g >> 2) & 0x3F) << 5 | ((g >> 3) & 0x1F));
-                }
-            }
-            return;
-        }
-
-        // ── FMT_A8_RLE (1): grayscale + RLE ─────────────────────
-        if (fmt == 1) {
+        // ── FMT_A8_RLE (0): grayscale + RLE ─────────────────────
+        if (imageFormat == 0) {
             const uint8_t* rle = (const uint8_t*)src;
             const uint32_t* off = (const uint32_t*)rle;
             uint16_t* tile = mTile->buffer();
             int tStride = mTile->stride();
-            const int visL = srcOffX;
-            const int visR = srcOffX + copyW;
+            const int visL = srcOffX, visR = srcOffX + copyW;
             uint16_t tintLut[256];
             if (tint) {
                 uint32_t tr = (tint->value >> 11) & 0x1F, tg = (tint->value >> 5) & 0x3F, tb = tint->value & 0x1F;
@@ -190,156 +195,66 @@ public:
                 }
             }
             for (int y = 0; y < copyH; y++) {
-                const uint8_t* p = rle + off[srcOffY + y];
+                uint32_t rowOff = off[srcOffY + y];
                 uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
-                int px = 0;
-                while (px < srcW) {
-                    uint8_t g = *p++;
-                    uint8_t len = *p++;
-                    int n = (int)len + 1;
-                    int runR = px + n;
-                    int cl = px < visL ? visL : px, cr = runR > visR ? visR : runR;
-                    if (cr > cl) {
-                        uint16_t* dp = dstRow + (cl - visL);
-                        int cnt = cr - cl;
-                        uint16_t c = tint ? tintLut[g]
+                if (rowOff & 0x80000000) {
+                    // Raw grayscale row: 1B/px
+                    const uint8_t* srow = rle + (rowOff & 0x7FFFFFFF);
+                    for (int x = 0; x < copyW; x++) {
+                        uint8_t g = srow[srcOffX + x];
+                        dstRow[x] = tint ? tintLut[g]
                             : (uint16_t)(((g >> 3) & 0x1F) << 11 | ((g >> 2) & 0x3F) << 5 | ((g >> 3) & 0x1F));
-                        if (cnt && ((uintptr_t)dp & 3)) { *dp++ = c; --cnt; }
-                        uint32_t c32 = ((uint32_t)c << 16) | c;
-                        uint32_t* d4 = (uint32_t*)dp;
-                        int wc = cnt >> 1;
-                        for (int i = 0; i < wc; i++) d4[i] = c32;
-                        if (cnt & 1) dp[cnt - 1] = c;
                     }
-                    px = runR;
-                }
-            }
-            return;
-        }
-
-        // ── FMT_PAL8 (2): palette + raw index ───────────────────
-        if (fmt == 2) {
-            const uint16_t* pal = (const uint16_t*)src;
-            const uint8_t*  idx = (const uint8_t*)src + 512;
-            uint16_t* tile = mTile->buffer();
-            int tStride = mTile->stride();
-            for (int y = 0; y < copyH; y++) {
-                const uint8_t* srow = idx + (srcOffY + y) * srcW + srcOffX;
-                uint16_t* drow = tile + (ty0 + y) * tStride + tx0;
-                for (int x = 0; x < copyW; x++) drow[x] = pal[srow[x]];
-            }
-            return;
-        }
-
-        // ── FMT_PAL8_RLE (3): palette + RLE ─────────────────────
-        if (fmt == 3) {
-            const uint16_t* pal = (const uint16_t*)src;
-            const uint8_t*  rle = (const uint8_t*)src + 512;
-            const uint32_t* off = (const uint32_t*)rle;
-            uint16_t* tile = mTile->buffer();
-            int tStride = mTile->stride();
-            const int visL = srcOffX, visR = srcOffX + copyW;
-            for (int y = 0; y < copyH; y++) {
-                const uint8_t* p = rle + off[srcOffY + y];
-                uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
-                int px = 0;
-                while (px < srcW) {
-                    uint8_t ix = *p++; uint8_t len = *p++;
-                    int n = (int)len + 1;
-                    int runR = px + n, cl = px < visL ? visL : px, cr = runR > visR ? visR : runR;
-                    if (cr > cl) {
-                        uint16_t c  = pal[ix];
-                        uint16_t* dp = dstRow + (cl - visL); int cnt = cr - cl;
-                        if (cnt && ((uintptr_t)dp & 3)) { *dp++ = c; --cnt; }
-                        uint32_t c32 = ((uint32_t)c << 16) | c;
-                        uint32_t* d4 = (uint32_t*)dp;
-                        int wc = cnt >> 1;
-                        for (int i = 0; i < wc; i++) d4[i] = c32;
-                        if (cnt & 1) dp[cnt - 1] = c;
-                    }
-                    px = runR;
-                }
-            }
-            return;
-        }
-
-        // ── FMT_PAL8_ALPHA (4): palette + raw index + raw alpha ──
-        if (fmt == 4) {
-            const uint16_t* pal = (const uint16_t*)src;
-            const uint8_t*  idx = (const uint8_t*)src + 512;
-            const uint8_t*  alp = idx + (uint32_t)srcW * srcH;
-            uint16_t* tile = mTile->buffer();
-            int tStride = mTile->stride();
-            for (int y = 0; y < copyH; y++) {
-                int sy = srcOffY + y;
-                const uint8_t* srow = idx + sy * srcW + srcOffX;
-                const uint8_t* arow = alp + sy * srcW + srcOffX;
-                uint16_t* drow = tile + (ty0 + y) * tStride + tx0;
-                for (int x = 0; x < copyW; x++) {
-                    uint8_t a = arow[x];
-                    if (a == 255) { drow[x] = pal[srow[x]]; }
-                    else if (a > 0) {
-                        uint16_t s = pal[srow[x]], d = drow[x];
-                        uint32_t ia = 255 - a;
-                        uint16_t r = (uint16_t)((((s >> 11) & 0x1F) * a + ((d >> 11) & 0x1F) * ia) / 255) << 11;
-                        uint16_t g = (uint16_t)((((s >> 5)  & 0x3F) * a + ((d >> 5)  & 0x3F) * ia) / 255) << 5;
-                        uint16_t b = (uint16_t)((( s        & 0x1F) * a + ( d        & 0x1F) * ia) / 255);
-                        drow[x] = r | g | b;
-                    }
-                }
-            }
-            return;
-        }
-
-        // ── FMT_PAL8_ALPHA_RLE (5): single-pass, alpha=0 skips write ──
-        if (fmt == 5) {
-            const uint16_t* pal = (const uint16_t*)src;
-            const uint8_t*  rle = (const uint8_t*)src + 512;
-            const uint32_t* off = (const uint32_t*)rle;
-            uint16_t* tile = mTile->buffer();
-            int tStride = mTile->stride();
-            const int visL = srcOffX, visR = srcOffX + copyW;
-            for (int y = 0; y < copyH; y++) {
-                const uint8_t* p = rle + off[srcOffY + y];
-                uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
-                int px = 0;
-                while (px < srcW) {
-                    uint8_t ix = *p++; uint8_t len = *p++;
-                    if (len & 0x80) {
-                        // Alpha run: per-pixel blend (max 8)
-                        int n = (len & 0x07) + 1;
-                        uint8_t a = kAlphaLevels[(len >> 4) & 0x03];
+                } else {
+                    const uint8_t* p = rle + rowOff;
+                    int px = 0;
+                    while (px < srcW) {
+                        uint8_t g = *p++;
+                        uint8_t len = *p++;
+                        int n = (int)len + 1;
                         int runR = px + n;
-                        int cl = px < visL ? visL : px;
-                        int cr = runR > visR ? visR : runR;
-                        while (cl < cr) {
-                            if (a > 0) {
-                                uint16_t s = pal[ix];
-                                uint16_t d = dstRow[cl - visL];
-                                uint32_t ia = 255 - a;
-                                uint16_t r = (uint16_t)((((s >> 11) & 0x1F) * a + ((d >> 11) & 0x1F) * ia) / 255) << 11;
-                                uint16_t g = (uint16_t)((((s >> 5)  & 0x3F) * a + ((d >> 5)  & 0x3F) * ia) / 255) << 5;
-                                uint16_t b = (uint16_t)((( s        & 0x1F) * a + ( d        & 0x1F) * ia) / 255);
-                                dstRow[cl - visL] = r | g | b;
-                            }
-                            cl++;
+                        int cl = px < visL ? visL : px, cr = runR > visR ? visR : runR;
+                        if (cr > cl) {
+                            uint16_t* dp = dstRow + (cl - visL);
+                            int cnt = cr - cl;
+                            uint16_t c = tint ? tintLut[g]
+                                : (uint16_t)(((g >> 3) & 0x1F) << 11 | ((g >> 2) & 0x3F) << 5 | ((g >> 3) & 0x1F));
+                            wordFill32(dp, cnt, c);
                         }
                         px = runR;
-                    } else {
-                        // Opaque run: word-fill (max 128)
-                        int n = (len & 0x7F) + 1;
-                        int runR = px + n;
-                        int cl = px < visL ? visL : px;
-                        int cr = runR > visR ? visR : runR;
+                    }
+                }
+            }
+            return;
+        }
+
+        // ── FMT_PAL_RLE (1): palette + RLE, opaque ───────────────
+        if (imageFormat == 1) {
+            const uint16_t* pal = (const uint16_t*)src;
+            const uint8_t*  rle = (const uint8_t*)src + paletteSize * 2;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint16_t* tile = mTile->buffer();
+            int tStride = mTile->stride();
+            const int visL = srcOffX, visR = srcOffX + copyW;
+            for (int y = 0; y < copyH; y++) {
+                uint32_t rowOff = off[srcOffY + y];
+                uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
+                if (rowOff & 0x80000000) {
+                    // Raw palette index row: 1B/px
+                    const uint8_t* srow = rle + (rowOff & 0x7FFFFFFF);
+                    for (int x = 0; x < copyW; x++)
+                        dstRow[x] = pal[srow[srcOffX + x]];
+                } else {
+                    const uint8_t* p = rle + rowOff;
+                    int px = 0;
+                    while (px < srcW) {
+                        uint8_t ix = *p++; uint8_t len = *p++;
+                        int n = (int)len + 1;
+                        int runR = px + n, cl = px < visL ? visL : px, cr = runR > visR ? visR : runR;
                         if (cr > cl) {
                             uint16_t c  = pal[ix];
                             uint16_t* dp = dstRow + (cl - visL); int cnt = cr - cl;
-                            if (cnt && ((uintptr_t)dp & 3)) { *dp++ = c; --cnt; }
-                            uint32_t c32 = ((uint32_t)c << 16) | c;
-                            uint32_t* d4 = (uint32_t*)dp;
-                            int wc = cnt >> 1;
-                            for (int i = 0; i < wc; i++) d4[i] = c32;
-                            if (cnt & 1) dp[cnt - 1] = c;
+                            wordFill32(dp, cnt, c);
                         }
                         px = runR;
                     }
@@ -348,16 +263,75 @@ public:
             return;
         }
 
-        // ── FMT_RGB565_RLE (6): direct color RLE, no palette ─────
-        if (fmt == 6 && mAlpha == 255 && !tint && !mask) {
+        // ── FMT_PAL_ALPHA_RLE (2): palette + RLE, alpha inline ───
+        if (imageFormat == 2) {
+            const uint16_t* pal = (const uint16_t*)src;
+            const uint8_t*  rle = (const uint8_t*)src + paletteSize * 2;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint16_t* tile = mTile->buffer();
+            int tStride = mTile->stride();
+            const int visL = srcOffX, visR = srcOffX + copyW;
+            for (int y = 0; y < copyH; y++) {
+                const uint8_t* p = rle + off[srcOffY + y];
+                uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
+                int px = 0;
+                while (px < srcW) {
+                    uint8_t head = *p++;
+                    uint8_t tt   = head >> 6;
+                    int n = (head & 0x3F) + 1;  // run length 1..64
+                    int runR = px + n;
+                    if (tt == 0) {
+                        // Fully transparent: no color data, skip
+                    } else {
+                        uint8_t ix = *p++;
+                        int cl = px < visL ? visL : px;
+                        int cr = runR > visR ? visR : runR;
+                        if (cr > cl) {
+                            if (tt == 1) {
+                                // Opaque: word-fill
+                                uint16_t c  = pal[ix];
+                                uint16_t* dp = dstRow + (cl - visL); int cnt = cr - cl;
+                                wordFill32(dp, cnt, c);
+                            } else {
+                                // Semi-transparent: blend
+                                uint8_t a = kTTAlpha[tt];  // tt=2→85, tt=3→170
+                                while (cl < cr) {
+                                    uint32_t combined = (uint32_t)a * mAlpha / 255;
+                                    if (combined > 0) {
+                                        dstRow[cl - visL] = blend565(pal[ix], dstRow[cl - visL], combined);
+                                    }
+                                    cl++;
+                                }
+                            }
+                        }
+                    }
+                    px = runR;
+                }
+            }
+            return;
+        }
+
+        // ── FMT_RGB565_RLE (3): direct color RLE, opaque ─────────
+        if (imageFormat == 3 && !tint) {
             const uint8_t* rle = (const uint8_t*)src;
             const uint32_t* off = (const uint32_t*)rle;
             uint16_t* tile = mTile->buffer();
             int tStride = mTile->stride();
             const int visL = srcOffX, visR = srcOffX + copyW;
-            const uint8_t* p = rle + off[srcOffY];
             for (int y = 0; y < copyH; y++) {
+                uint32_t rowOff = off[srcOffY + y];
                 uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
+                if (rowOff & 0x80000000) {
+                    // Raw RGB565 row: 2B/px
+                    const uint16_t* srow = (const uint16_t*)(rle + (rowOff & 0x7FFFFFFF));
+                    if (mAlpha == 255) {
+                        memcpy(dstRow, srow + srcOffX, (size_t)copyW * 2);
+                    } else {
+                        for (int x = 0; x < copyW; x++)
+                            dstRow[x] = blend565(srow[srcOffX + x], dstRow[x], mAlpha);
+                    }
+                } else {
+                const uint8_t* p = rle + rowOff;
                 int px = 0;
                 while (px < srcW) {
                     uint8_t cmd = *p++;
@@ -367,23 +341,83 @@ public:
                     int cr = runR > visR ? visR : runR;
                     if (cmd & 0x80) {
                         // literal: n distinct pixels
-                        if (cr > cl)
-                            memcpy(dstRow + (cl - visL),
-                                   (const uint16_t*)p + (cl - px),
-                                   (size_t)(cr - cl) * 2);
+                        if (cr > cl) {
+                            if (mAlpha == 255) {
+                                memcpy(dstRow + (cl - visL),
+                                       (const uint16_t*)p + (cl - px),
+                                       (size_t)(cr - cl) * 2);
+                            } else {
+                                const uint16_t* sp = (const uint16_t*)p + (cl - px);
+                                for (int i = 0; i < cr - cl; i++)
+                                    dstRow[(cl - visL) + i] = blend565(sp[i], dstRow[(cl - visL) + i], mAlpha);
+                            }
+                        }
                         p += n * 2;
                     } else {
-                        // run: one color ×n → 32-bit word fill
+                        // run: one color ×n
                         uint16_t c = *(const uint16_t*)p; p += 2;
                         if (cr > cl) {
-                            uint16_t* dp = dstRow + (cl - visL);
-                            int cnt = cr - cl;
-                            if (cnt && ((uintptr_t)dp & 3)) { *dp++ = c; --cnt; }
-                            uint32_t c32 = ((uint32_t)c << 16) | c;
-                            uint32_t* d4 = (uint32_t*)dp;
-                            int wc = cnt >> 1;
-                            for (int i = 0; i < wc; i++) d4[i] = c32;
-                            if (cnt & 1) dp[cnt - 1] = c;
+                            if (mAlpha == 255) {
+                                uint16_t* dp = dstRow + (cl - visL);
+                                int cnt = cr - cl;
+                                wordFill32(dp, cnt, c);
+                            } else {
+                                for (int i = 0; i < cr - cl; i++)
+                                    dstRow[(cl - visL) + i] = blend565(c, dstRow[(cl - visL) + i], mAlpha);
+                            }
+                        }
+                    }
+                    px = runR;
+                }
+                } // end if raw/RLE
+            }
+            return;
+        }
+
+        // ── FMT_RGB565A_RLE (4): direct color RLE, alpha inline ──
+        if (imageFormat == 4) {
+            const uint8_t* rle = (const uint8_t*)src;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint16_t* tile = mTile->buffer();
+            int tStride = mTile->stride();
+            const int visL = srcOffX, visR = srcOffX + copyW;
+            for (int y = 0; y < copyH; y++) {
+                const uint8_t* p = rle + off[srcOffY + y];
+                uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
+                int px = 0;
+                while (px < srcW) {
+                    uint8_t head = *p++;
+                    uint8_t tt   = head >> 6;
+                    int n = (head & 0x3F) + 1;  // run length 1..64
+                    int runR = px + n;
+                    if (tt == 0) {
+                        // Fully transparent: no color data, skip
+                    } else {
+                        uint16_t c = *(const uint16_t*)p; p += 2;
+                        int cl = px < visL ? visL : px;
+                        int cr = runR > visR ? visR : runR;
+                        if (cr > cl) {
+                            if (tt == 1) {
+                                // Opaque
+                                if (mAlpha == 255) {
+                                    uint16_t* dp = dstRow + (cl - visL);
+                                    int cnt = cr - cl;
+                                    wordFill32(dp, cnt, c);
+                                } else {
+                                    for (int i = 0; i < cr - cl; i++)
+                                        dstRow[(cl - visL) + i] = blend565(c, dstRow[(cl - visL) + i], mAlpha);
+                                }
+                            } else {
+                                // Semi-transparent (tt=2→85, tt=3→170)
+                                uint8_t a = kTTAlpha[tt];
+                                while (cl < cr) {
+                                    uint32_t combined = (uint32_t)a * mAlpha / 255;
+                                    if (combined > 0) {
+                                        dstRow[cl - visL] = blend565(c, dstRow[cl - visL], combined);
+                                    }
+                                    cl++;
+                                }
+                            }
                         }
                     }
                     px = runR;
@@ -401,11 +435,10 @@ public:
                           int dx, int dy,
                           int rotCx, int rotCy,
                           int16_t angleDeg,
-                          const uint8_t* mask   = nullptr,
                           const RGB565* tint   = nullptr,
                           Tile* rotBuffer      = nullptr) {
         drawImageRotatedDeci(src, fmt, srcW, srcH, dx, dy, rotCx, rotCy,
-                             (int)angleDeg * 10, mask, tint, rotBuffer);
+                             (int)angleDeg * 10, tint, rotBuffer);
     }
 
     void drawImageRotatedDeci(const void* src, int fmt,
@@ -413,9 +446,12 @@ public:
                           int dx, int dy,
                           int rotCx, int rotCy,
                           int angleDeci,
-                          const uint8_t* mask   = nullptr,
                           const RGB565* tint   = nullptr,
                           Tile* rotBuffer      = nullptr) {
+
+        int imageFormat = LITHO_FORMAT(fmt);
+        int palCount    = LITHO_PALETTE_SIZE(fmt);
+        int palBytes    = palCount * 2;
 
         if (!resSinTable() && angleDeci % 900 != 0) return;
 
@@ -475,9 +511,6 @@ public:
         uint16_t* dstBuf    = useRotBuf ? rotBuffer->buffer() : mTile->buffer();
         int       dstStride = useRotBuf ? rotBuffer->stride() : mTile->stride();
 
-        (void)fmt; (void)mask; (void)tint;
-        // For RLE formats, NN sampling is done inline below
-
         for (int y = 0; y < outH; y++) {
             int32_t curSX = baseSX;
             int32_t curSY = baseSY;
@@ -501,24 +534,47 @@ public:
                     uint16_t s;
                     uint32_t pixelA = 255;
 
-                    // RLE formats (1,3,5): decode from RLE stream
-                    if (fmt == 1 || fmt == 3 || fmt == 5) {
+                    // FMT_A8_RLE (0), FMT_PAL_RLE (1), FMT_PAL_ALPHA_RLE (2): head-byte RLE or raw row
+                    if (imageFormat == 0 || imageFormat == 1 || imageFormat == 2) {
                         const uint8_t* rle;
                         const uint16_t* pal = nullptr;
-                        if (fmt == 1) { rle = (const uint8_t*)src; }
-                        else          { pal = (const uint16_t*)src; rle = (const uint8_t*)src + 512; }
+                        if (imageFormat == 0) {
+                            rle = (const uint8_t*)src;
+                        } else {
+                            pal = (const uint16_t*)src;
+                            rle = (const uint8_t*)src + palBytes;
+                        }
                         const uint32_t* off = (const uint32_t*)rle;
-                        const uint8_t* p = rle + off[sy];
-                        int px = 0;
+                        uint32_t rowOff = off[sy];
+                        if (rowOff & 0x80000000) {
+                            // Raw row: 1B/px palette index or grayscale
+                            uint8_t v = (rle + (rowOff & 0x7FFFFFFF))[sx];
+                            if (imageFormat == 0) {
+                                uint8_t g = v;
+                                if (tint) {
+                                    uint32_t tr = (tint->value >> 11) & 0x1F, tg = (tint->value >> 5) & 0x3F, tb = tint->value & 0x1F;
+                                    uint32_t r = (tr * g) / 255, gg = (tg * g) / 255, b = (tb * g) / 255;
+                                    if (r > 0x1F) r = 0x1F; if (gg > 0x3F) gg = 0x3F; if (b > 0x1F) b = 0x1F;
+                                    s = (uint16_t)((r << 11) | (gg << 5) | b);
+                                } else { uint32_t g5 = (g >> 3) & 0x1F, g6 = (g >> 2) & 0x3F; s = (uint16_t)((g5 << 11) | (g6 << 5) | g5); }
+                            } else {
+                                s = pal[v];
+                            }
+                        } else {
+                            const uint8_t* p = rle + rowOff;
+                            int px = 0;
                         while (px <= sx) {
-                            uint8_t val = *p++;
-                            uint8_t len = *p++;
-                            int n;
-                            if (fmt == 5 && (len & 0x80))      n = (len & 0x07) + 1;
-                            else if (fmt == 5)                  n = (len & 0x7F) + 1;
-                            else                               n = (int)len + 1;
+                            uint8_t head = *p++;
+                            uint8_t tt   = head >> 6;
+                            int n = (head & 0x1F) + 1;  // 1..32
+                            uint8_t alpha = 255;
+                            uint8_t val = 0;
+                            if (tt != 0) {
+                                val = *p++;
+                                alpha = kTTAlpha[tt];
+                            }
                             if (px + n > sx) {
-                                if (fmt == 1) {
+                                if (imageFormat == 0) {
                                     uint8_t g = val;
                                     if (tint) {
                                         uint32_t tr = (tint->value >> 11) & 0x1F, tg = (tint->value >> 5) & 0x3F, tb = tint->value & 0x1F;
@@ -526,30 +582,62 @@ public:
                                         if (r > 0x1F) r = 0x1F; if (gg > 0x3F) gg = 0x3F; if (b > 0x1F) b = 0x1F;
                                         s = (uint16_t)((r << 11) | (gg << 5) | b);
                                     } else { uint32_t g5 = (g >> 3) & 0x1F, g6 = (g >> 2) & 0x3F; s = (uint16_t)((g5 << 11) | (g6 << 5) | g5); }
-                                } else { s = pal[val]; }
-                                if (fmt == 5 && (len & 0x80)) pixelA = kAlphaLevels[(len >> 4) & 0x03];
+                                } else {
+                                    s = pal[val];
+                                }
+                                pixelA = alpha;
                                 break;
                             }
                             px += n;
                         }
-                    } else if (fmt == 0 || fmt == 2 || fmt == 4) {
-                        // Raw formats: direct index into pixel array
-                        if (fmt == 0) {
-                            uint8_t g = ((const uint8_t*)src)[sy * srcW + sx];
-                            if (tint) {
-                                uint32_t tr = (tint->value >> 11) & 0x1F, tg = (tint->value >> 5) & 0x3F, tb = tint->value & 0x1F;
-                                uint32_t r = (tr * g) / 255, gg = (tg * g) / 255, b = (tb * g) / 255;
-                                if (r > 0x1F) r = 0x1F; if (gg > 0x3F) gg = 0x3F; if (b > 0x1F) b = 0x1F;
-                                s = (uint16_t)((r << 11) | (gg << 5) | b);
-                            } else { uint32_t g5 = (g >> 3) & 0x1F, g6 = (g >> 2) & 0x3F; s = (uint16_t)((g5 << 11) | (g6 << 5) | g5); }
+                        } // end if raw/RLE
+                    // FMT_RGB565_RLE (3): run/literal command encoding or raw row
+                    } else if (imageFormat == 3) {
+                        const uint8_t* rle = (const uint8_t*)src;
+                        const uint32_t* off = (const uint32_t*)rle;
+                        uint32_t rowOff = off[sy];
+                        if (rowOff & 0x80000000) {
+                            s = ((const uint16_t*)(rle + (rowOff & 0x7FFFFFFF)))[sx];
                         } else {
-                            const uint16_t* pal = (const uint16_t*)src;
-                            const uint8_t*  idx = (const uint8_t*)src + 512;
-                            s = pal[idx[sy * srcW + sx]];
-                            if (fmt == 4) {
-                                const uint8_t* alp = idx + (uint32_t)srcW * srcH;
-                                pixelA = alp[sy * srcW + sx];
+                        const uint8_t* p = rle + rowOff;
+                        int px = 0;
+                        while (px <= sx) {
+                            uint8_t cmd = *p++;
+                            int n = (cmd & 0x7F) + 1;
+                            if (px + n > sx) {
+                                if (cmd & 0x80) {
+                                    s = *(const uint16_t*)(p + (sx - px) * 2);
+                                } else {
+                                    s = *(const uint16_t*)p;
+                                }
+                                break;
                             }
+                            if (cmd & 0x80) p += n * 2;
+                            else p += 2;
+                            px += n;
+                        }
+                        } // end if raw/RLE
+                    // FMT_RGB565A_RLE (4): head-byte + optional color
+                    } else if (imageFormat == 4) {
+                        const uint8_t* rle = (const uint8_t*)src;
+                        const uint32_t* off = (const uint32_t*)rle;
+                        const uint8_t* p = rle + off[sy];
+                        int px = 0;
+                        while (px <= sx) {
+                            uint8_t head = *p++;
+                            uint8_t tt   = head >> 6;
+                            int n = (head & 0x1F) + 1;  // 1..32
+                            uint8_t alpha = kTTAlpha[tt];
+                            uint16_t c = 0;
+                            if (tt != 0) {
+                                c = *(const uint16_t*)p; p += 2;
+                            }
+                            if (px + n > sx) {
+                                s = c;
+                                pixelA = alpha;
+                                break;
+                            }
+                            px += n;
                         }
                     } else {
                         s = 0;
@@ -569,11 +657,7 @@ public:
                         } else if (pixelA > 0) {
                             uint32_t a = pixelA * (uint32_t)mAlpha / 255;
                             if (a > 0) {
-                                uint32_t ia = 255 - a;
-                                uint16_t r = (uint16_t)((((s >> 11) & 0x1F) * a + ((d >> 11) & 0x1F) * ia) / 255) << 11;
-                                uint16_t g = (uint16_t)((((s >> 5)  & 0x3F) * a + ((d >> 5)  & 0x3F) * ia) / 255) << 5;
-                                uint16_t b = (uint16_t)((( s        & 0x1F) * a + ( d        & 0x1F) * ia) / 255);
-                                dstRow[tdstx] = r | g | b;
+                                dstRow[tdstx] = blend565(s, d, a);
                             }
                         }
                     }
@@ -615,13 +699,7 @@ public:
                     if (mAlpha == 255) {
                         dstRow[tdstx] = s;
                     } else {
-                        uint32_t a  = mAlpha;
-                        uint32_t ia = 255 - a;
-                        uint16_t d = dstRow[tdstx];
-                        uint16_t r = (uint16_t)((((s >> 11) & 0x1F) * a + ((d >> 11) & 0x1F) * ia) / 255) << 11;
-                        uint16_t g = (uint16_t)((((s >> 5)  & 0x3F) * a + ((d >> 5)  & 0x3F) * ia) / 255) << 5;
-                        uint16_t b = (uint16_t)((( s        & 0x1F) * a + ( d        & 0x1F) * ia) / 255);
-                        dstRow[tdstx] = r | g | b;
+                        dstRow[tdstx] = blend565(s, dstRow[tdstx], mAlpha);
                     }
                 }
             }
@@ -663,18 +741,11 @@ public:
                 for (int x = 0; x < copyW; x++) dstRow[x] = srcRow[x];
             }
         } else {
-            uint32_t a  = mAlpha;
-            uint32_t ia = 255 - a;
             for (int y = 0; y < copyH; y++) {
                 uint16_t*       dstRow = mTile->buffer() + (ty0 + y) * mTile->stride() + tx0;
                 const uint16_t* srcRow = src.buffer() + (srcOffY + y) * src.stride() + srcOffX;
                 for (int x = 0; x < copyW; x++) {
-                    uint16_t s = srcRow[x];
-                    uint16_t d = dstRow[x];
-                    uint16_t r = (uint16_t)((((s >> 11) & 0x1F) * a + ((d >> 11) & 0x1F) * ia) / 255) << 11;
-                    uint16_t g = (uint16_t)((((s >> 5)  & 0x3F) * a + ((d >> 5)  & 0x3F) * ia) / 255) << 5;
-                    uint16_t b = (uint16_t)((( s        & 0x1F) * a + ( d        & 0x1F) * ia) / 255);
-                    dstRow[x] = r | g | b;
+                    dstRow[x] = blend565(srcRow[x], dstRow[x], mAlpha);
                 }
             }
         }

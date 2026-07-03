@@ -13,6 +13,7 @@
 #include "port/display_adapter.hpp"
 #include "port/input_adapter.hpp"
 #include "port/tick_adapter.hpp"
+extern "C" int lcd_te_late_count(void);
 
 #include <stdint.h>
 #include <assert.h>
@@ -88,6 +89,11 @@ public:
             Event e;
             if (mInput.pollEvent(e)) { mDeferredEv = e; mHasDeferredEv = true; }
         };
+        // Pre-render the first tile, then wait for TE before starting xfer.
+        mPFB.setPreXferHook([](void* ctx) {
+            static_cast<DisplayAdapter*>(ctx)->waitTE();
+        }, &mDisplay);
+
         for (int ri = 0; ri < mDirtyList.count(); ri++) {
             const Region& r = mDirtyList.regions()[ri];
 
@@ -149,7 +155,9 @@ public:
     // is overlapping; tot ≈ xfer ⇒ transfer-bound (ideal); tot rising with draw
     // while xfer flat ⇒ CPU draw broke through the DMA and is now the bottleneck.
     void dumpStats() {
-        printf("[batch] %d frames, us | idx  tot   in rend draw xfer setup tch\r\n", mRingCount);
+        int late = lcd_te_late_count();
+        printf("[batch] %d frames, late=%d, us | idx  tot   in rend draw xfer setup tch\r\n",
+               mRingCount, late);
         for (int i = 0; i < mRingCount; i++) {
             const FrameStat& f = mRing[i];
             printf("%3d %5lu %4lu %5lu %5lu %5lu %4lu %3lu\r\n", i,

@@ -56,8 +56,8 @@ int main(void)
 
     /* ---- LCD init ---- */
     uart_puts("[firmware] LCD init...\r\n");
-    lcd_set_bus(&lcd_bus_qspi);
-    lcd_set_ic(&lcd_ic_co5300);
+    lcd_set_bus(&lcd_bus_default);
+    lcd_set_ic(&lcd_ic_default);
     lcd_set_geometry(LCD_WIDTH, LCD_HEIGHT);
     lcd_set_pins(LCD_RST, LCD_BL);
     lcd_init();

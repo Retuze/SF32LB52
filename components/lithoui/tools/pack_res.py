@@ -6,10 +6,10 @@ Usage:  python3 tools/pack_res.py <ui_dir> [output_dir]
 Directory layout:
     ui/<name>/
       info.txt              name=..., version=...
-      opaque/               opaque color -> FMT_PAL8_RLE
-      alpha/                color + alpha -> FMT_PAL8_RLE_ALPHA
-      gray/                 grayscale -> FMT_A8_RLE (tintable)
-      rotate/               rotation-ready -> FMT_PAL8_RLE_ALPHA (triggers sin table)
+      tint/                 grayscale -> FMT_A8_RLE (tintable at runtime)
+      solid/                opaque color -> FMT_PAL_RLE or FMT_RGB565_RLE
+      alpha/                color + alpha -> FMT_PAL_ALPHA_RLE or FMT_RGB565A_RLE
+                            (files starting with r_ get R_ prefix → triggers sin table)
 
 Outputs:
     res_images.bin    binary bundle
@@ -37,14 +37,19 @@ VERSION     = 0x00010000
 ENTRY_SIZE  = 16
 HEADER_SIZE = 16
 
-# Format enum — 7 formats
-FMT_A8              = 0   # grayscale raw
-FMT_A8_RLE          = 1   # grayscale + RLE
-FMT_PAL8            = 2   # 256-color palette + raw index
-FMT_PAL8_RLE        = 3   # 256-color palette + RLE
-FMT_PAL8_ALPHA      = 4   # 256-color palette + raw index + raw alpha
-FMT_PAL8_ALPHA_RLE  = 5   # 256-color palette + RLE with inline alpha
-FMT_RGB565_RLE      = 6   # raw RGB565 + RLE (no palette, direct color)
+# Format enum — 5 formats (all RLE)
+FMT_A8_RLE           = 0  # grayscale RLE, tint coloring, opaque
+FMT_PAL_RLE          = 1  # palette RLE, RGB565 palette, opaque
+FMT_PAL_ALPHA_RLE    = 2  # palette RLE, RGB565 palette, alpha inline in RLE stream
+FMT_RGB565_RLE       = 3  # direct color RLE, opaque
+FMT_RGB565A_RLE      = 4  # direct color RLE, alpha inline in RLE stream
+
+def make_format_info(fmt, palette_bits):
+    """Pack format + paletteBits into one byte.
+    bits 2:0 = format enum (0-4)
+    bits 7:3 = paletteBits: 0=no palette, 1..8 = log2 of palette entry count
+    """
+    return (palette_bits << 3) | fmt
 
 # Alpha levels (2 bits → 4 levels) for alpha formats
 ALPHA_LEVELS = [0, 85, 170, 255]
@@ -87,62 +92,73 @@ def encode_rle(values, w, h, alpha=None):
     """
     Encode a row-major array of bytes into RLE format.
 
-    No-alpha formats (alpha=None, FMT_A8_RLE / FMT_PAL8_RLE):
+    No-alpha formats (alpha=None, FMT_A8_RLE / FMT_PAL_RLE):
       [value_byte][length_byte]  — length = count-1 (0..255, 1..256 pixels)
 
-    Alpha format (FMT_PAL8_RLE_ALPHA):
-      [value_byte][length_byte]
-        length.bit7 = 0 → opaque, bits6:0 = count-1 (1..128)
-        length.bit7 = 1 → alpha,  bits5:4 = alpha_level (0..3),
-                          bits2:0 = count-1 (1..8)
+    Alpha format (FMT_PAL_ALPHA_RLE):
+      Head byte: [TTT|LLLLL]  (TTT=bits7:5, LLLLL=bits4:0=run_len-1)
+        TT=00 (alpha=0,  fully transparent): 1-byte record, no color data
+        TT=01 (alpha=255, opaque):            head + [palette_idx]
+        TT=10 (alpha=85):                     head + [palette_idx]
+        TT=11 (alpha=170):                    head + [palette_idx]
+      Run length = (head & 0x3F) + 1 = 1..64
 
     Returns bytes: [h*4 offset table][RLE stream].
     """
     out = bytearray(h * 4)  # placeholder for offset table
     max_run_no_alpha = 256   # full 8-bit length
-    max_run_opaque   = 128   # bit7=0, bits6:0=7 bits
+    max_run           = 64   # max run for alpha formats
+    ROW_RAW_FLAG      = 0x80000000
 
     for y in range(h):
-        # Fill offset for this row
-        struct.pack_into('<I', out, y * 4, len(out))
-
         row = values[y * w:(y + 1) * w]
         row_alpha = alpha[y * w:(y + 1) * w] if alpha else None
+
+        row_start = len(out)  # where row data begins
 
         x = 0
         while x < w:
             v = row[x]
 
             if row_alpha:
-                # ── PAL8_RLE_ALPHA ──────────────────────────
+                # ── PAL_ALPHA_RLE ────────────────────────────
                 a_cur = quantize_alpha(row_alpha[x])
 
-                if a_cur == 3:
-                    # Opaque → use opaque encoding (bit7=0), up to 128
-                    run = 1
-                    while (x + run < w and run < max_run_opaque and
-                           row[x + run] == v and quantize_alpha(row_alpha[x + run]) == 3):
-                        run += 1
+                run = 1
+                while (x + run < w and run < max_run and
+                       row[x + run] == v and quantize_alpha(row_alpha[x + run]) == a_cur):
+                    run += 1
+
+                if a_cur == 0:
+                    out.append(run - 1)
+                elif a_cur == 3:
+                    out.append(0x40 | (run - 1))
                     out.append(v)
-                    out.append(run - 1)  # bit7=0, count-1
-                    x += run
                 else:
-                    # Transparent → alpha encoding (bit7=1), up to 8
-                    run = 1
-                    while (x + run < w and run < 8 and
-                           row[x + run] == v and quantize_alpha(row_alpha[x + run]) == a_cur):
-                        run += 1
+                    out.append((a_cur << 6) | (run - 1))
                     out.append(v)
-                    out.append(0x80 | (a_cur << 4) | (run - 1))
-                    x += run
+                x += run
             else:
-                # ── A8_RLE / PAL8_RLE (no alpha) ─────────────
+                # ── A8_RLE / PAL_RLE (no alpha): per-row adaptive ─
                 run = 1
                 while x + run < w and run < max_run_no_alpha and row[x + run] == v:
                     run += 1
                 out.append(v)
                 out.append(run - 1)  # full 8-bit: 0..255
                 x += run
+
+        # Per-row adaptive: if raw (1B/px) is smaller than RLE, use raw
+        if not row_alpha:
+            rle_bytes = len(out) - row_start
+            if w < rle_bytes:
+                del out[row_start:]          # undo RLE
+                for v in row:
+                    out.append(v)            # raw 1B/px
+                struct.pack_into('<I', out, y * 4, row_start | ROW_RAW_FLAG)
+            else:
+                struct.pack_into('<I', out, y * 4, row_start)
+        else:
+            struct.pack_into('<I', out, y * 4, row_start)
 
     return bytes(out)
 
@@ -151,13 +167,16 @@ def rle_encode_rgb565(pixels, w, h):
     """
     RLE compress RGB565 uint16 pixels with row offset table.
     cmd byte: bit7=0→run(count-1)[color×2]; bit7=1→literal(count-1)[pixels×2n]
-    Returns bytes: [h*4 off][RLE stream], or None if RLE > raw.
+    Per-row adaptive: offset bit31=1 → raw RGB565 pixels (w*2 bytes).
+    Returns bytes: [h*4 off][RLE/raw stream], or None if entirely RLE > raw.
     """
+    ROW_RAW_FLAG = 0x80000000
     off_size = h * 4
     out = bytearray(off_size)
+    raw_row_bytes = w * 2
     for y in range(h):
-        struct.pack_into('<I', out, y * 4, len(out))
         row = pixels[y * w:(y + 1) * w]
+        row_start = len(out)
         x = 0
         while x < w:
             c = row[x]
@@ -181,7 +200,66 @@ def rle_encode_rgb565(pixels, w, h):
                     out.append(pc & 0xFF)
                     out.append((pc >> 8) & 0xFF)
                 x += lit
+
+        # Per-row adaptive: raw = 2B/px
+        rle_bytes = len(out) - row_start
+        if raw_row_bytes < rle_bytes:
+            del out[row_start:]
+            for c in row:
+                out.append(c & 0xFF)
+                out.append((c >> 8) & 0xFF)
+            struct.pack_into('<I', out, y * 4, row_start | ROW_RAW_FLAG)
+        else:
+            struct.pack_into('<I', out, y * 4, row_start)
+
     return bytes(out) if len(out) < w * h * 2 else None
+
+
+def encode_rle_rgb565_alpha(pixels, alphas, w, h):
+    """
+    RLE for FMT_RGB565A_RLE. Row offset table + variable-length records.
+
+    Record format (same head byte as PAL_ALPHA_RLE):
+      Head: [TT|LLLLLL]
+        TT=00 (alpha=0,  fully transparent): 1-byte record, no color
+        TT=01 (alpha=255, opaque):            head + [c_lo][c_hi]
+        TT=10 (alpha=85):                     head + [c_lo][c_hi]
+        TT=11 (alpha=170):                    head + [c_lo][c_hi]
+      Run length = (head & 0x3F) + 1 = 1..64
+
+    Returns bytes: [h*4 off][RLE stream].
+    """
+    out = bytearray(h * 4)
+    max_run = 32
+
+    for y in range(h):
+        struct.pack_into('<I', out, y * 4, len(out))
+        row_pix = pixels[y * w:(y + 1) * w]
+        row_a   = alphas[y * w:(y + 1) * w]
+        x = 0
+        while x < w:
+            c = row_pix[x]
+            a_cur = quantize_alpha(row_a[x])
+
+            run = 1
+            while (x + run < w and run < max_run and
+                   row_pix[x + run] == c and
+                   quantize_alpha(row_a[x + run]) == a_cur):
+                run += 1
+
+            if a_cur == 0:
+                out.append(run - 1)
+            elif a_cur == 3:
+                out.append(0x40 | (run - 1))
+                out.append(c & 0xFF)
+                out.append((c >> 8) & 0xFF)
+            else:
+                out.append((a_cur << 6) | (run - 1))
+                out.append(c & 0xFF)
+                out.append((c >> 8) & 0xFF)
+            x += run
+
+    return bytes(out)
 
 
 # ── pack functions ──
@@ -195,17 +273,23 @@ def pack_grayscale(path):
     return w, h, gray
 
 
+def round_up_pow2(n):
+    """Round n up to the nearest power of 2."""
+    if n <= 2: return 2
+    return 1 << (n - 1).bit_length()
+
+
 def pack_pal8(path, with_alpha=False):
     """
-    PNG → 256-color palette + index array + optional alpha array.
+    PNG → dynamic-size palette + index array + optional alpha array.
 
-    Returns (w, h, pal565, index, alpha_or_None).
+    Returns (w, h, pal565, pal_bits, idx, alpha_or_None).
+    pal_bits = log2(palette entry count), 1..8.
     """
     if with_alpha:
         img = Image.open(path).convert("RGBA")
         w, h = img.size
         data = list(img.getdata())
-        # Separate RGB and alpha
         rgb_data = [(r, g, b) for r, g, b, a in data]
         alpha_data = [a for r, g, b, a in data]
     else:
@@ -214,17 +298,21 @@ def pack_pal8(path, with_alpha=False):
         rgb_data = list(img.getdata())
         alpha_data = None
 
-    # Quantize RGB to 256 colors
-    # Use Pillow's quantize on a temporary RGB image
+    # Quantize RGB to max 256 colors
     tmp = Image.new("RGB", (w, h))
     tmp.putdata(rgb_data)
     q = tmp.quantize(colors=256, method=Image.MEDIANCUT)
     idx = list(q.getdata())
     pal = q.getpalette() or []
-    ncol = min(256, len(pal) // 3)
-    pal565 = [rgba_to_rgb565(pal[i*3], pal[i*3+1], pal[i*3+2]) for i in range(ncol)]
 
-    return w, h, pal565, idx, alpha_data
+    # Dynamically size the palette to the actual used colors
+    max_idx = max(idx) + 1  # actual color count used in the index
+    ncol = round_up_pow2(max_idx)
+    if ncol > 256: ncol = 256
+    pal_bits = ncol.bit_length() - 1  # log2(palette size), 1..8
+    pal565 = [rgba_to_rgb565(pal[i*3], pal[i*3+1], pal[i*3+2]) for i in range(min(ncol, len(pal) // 3))]
+
+    return w, h, pal565, pal_bits, idx, alpha_data
 
 
 def has_meaningful_alpha(alpha_data):
@@ -269,9 +357,10 @@ def write_bin(path, entries, data_chunks, sin_table):
 
         # Entries
         for e in entries:
-            f.write(struct.pack("<HHHHII",
+            f.write(struct.pack("<HHHBBII",
                      e["id"], e["width"], e["height"],
-                     e["fmt"], e["offset"], e["size"]))
+                     e["formatInfo"], 0,  # reserved byte
+                     e["offset"], e["size"]))
 
         # Pixel data
         for e in entries:
@@ -297,21 +386,26 @@ typedef enum ImageId {{
 }} ImageId;
 
 enum ImageFormat {{
-    FMT_A8              = 0,  // grayscale raw
-    FMT_A8_RLE          = 1,  // grayscale + RLE
-    FMT_PAL8            = 2,  // 256-color palette + raw index
-    FMT_PAL8_RLE        = 3,  // 256-color palette + RLE
-    FMT_PAL8_ALPHA      = 4,  // 256-color palette + raw index + raw alpha
-    FMT_PAL8_ALPHA_RLE  = 5,  // 256-color palette + RLE with inline alpha
-    FMT_RGB565_RLE      = 6,  // raw RGB565 + RLE (direct color, no palette)
+    FMT_A8_RLE          = 0,  // grayscale RLE, tint coloring, opaque
+    FMT_PAL_RLE         = 1,  // palette RLE, RGB565 palette, opaque
+    FMT_PAL_ALPHA_RLE   = 2,  // palette RLE, RGB565 palette, alpha inline
+    FMT_RGB565_RLE      = 3,  // direct color RLE, opaque
+    FMT_RGB565A_RLE     = 4,  // direct color RLE, alpha inline
 }};
+
+// formatInfo byte: bits 2:0 = format enum, bits 7:3 = paletteBits
+// paletteBits = 0 → no palette; 1..8 → 2^N palette entries (RGB565 each)
+#define LITHO_FORMAT(info)       ((info) & 0x07)
+#define LITHO_PALETTE_BITS(info) (((info) >> 3) & 0x1F)
+#define LITHO_PALETTE_SIZE(info) (LITHO_PALETTE_BITS(info) ? (1 << LITHO_PALETTE_BITS(info)) : 0)
 
 #pragma pack(push, 1)
 typedef struct ImageEntry {{
     uint16_t id;
     uint16_t width;
     uint16_t height;
-    uint16_t format;
+    uint8_t  formatInfo;   // format + paletteBits (see macros above)
+    uint8_t  reserved;
     uint32_t offset;
     uint32_t size;
 }} ImageEntry;
@@ -345,6 +439,17 @@ static inline const ImageEntry* imageEntry(ImageId id) {{
 }}
 static inline const void* imagePixels(ImageId id) {{
     return (const void*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
+}}
+// Palette pointer for FMT_PAL_RLE / FMT_PAL_ALPHA_RLE.
+// Palette is stored at the beginning of the data chunk, before the RLE stream.
+static inline const uint16_t* imagePalette(ImageId id) {{
+    int palBits = LITHO_PALETTE_BITS(imageEntry(id)->formatInfo);
+    return (palBits > 0) ? (const uint16_t*)imagePixels(id) : nullptr;
+}}
+// Byte offset from pixel data start to the RLE row-offset table
+// (skips the variable-size palette).
+static inline uint32_t imageRleOffset(ImageId id) {{
+    return (uint32_t)LITHO_PALETTE_SIZE(imageEntry(id)->formatInfo) * 2;
 }}
 {sin_accessor}
 #endif
@@ -441,10 +546,9 @@ def main():
     # Directory → format mapping
     type_map = [
         # (dirname,     prefix,     pack_fn,         with_alpha)
-        ("gray",        PRE_GRAY,   pack_grayscale,  False),
-        ("opaque",      PRE_OPAQUE, pack_pal8,       False),
+        ("tint",        PRE_GRAY,   pack_grayscale,  False),
+        ("solid",       PRE_OPAQUE, pack_pal8,       False),
         ("alpha",       PRE_ALPHA,  pack_pal8,       True),
-        ("rotate",      PRE_ROT,    pack_pal8,       True),
     ]
 
     all_entries = []
@@ -457,66 +561,70 @@ def main():
         if not pngs:
             continue
 
-        print(f"\n  [{dirname}/]  {len(pngs)} files  prefix='{prefix}'")
+        print(f"\n  [{dirname}/]  {len(pngs)} files  default_prefix='{prefix}'")
         for p in pngs:
-            name = p.stem
+            # In alpha/, files starting with r_ get R_ prefix (triggers sin table)
+            file_prefix = prefix
+            fname = p.stem
+            if dirname == "alpha" and fname.lower().startswith("r_"):
+                file_prefix = PRE_ROT
+                fname = fname[2:]  # strip "r_" from name
+            name = fname
 
             if pack_fn is pack_grayscale:
-                # Grayscale → A8_RLE or A8 (raw fallback if RLE > raw)
+                # Grayscale → always FMT_A8_RLE (RLE always beats raw for UI icons)
                 w, h, gray = pack_fn(p)
-                raw_bytes = struct.pack(f"<{w*h}B", *gray)
-                rle = encode_rle(gray, w, h)
-                if len(rle) < len(raw_bytes):
-                    chunk = rle
-                    actual_fmt = FMT_A8_RLE
-                else:
-                    chunk = raw_bytes
-                    actual_fmt = FMT_A8
+                chunk = encode_rle(gray, w, h)
+                actual_fmt = FMT_A8_RLE
+                palette_bits = 0
 
             elif pack_fn is pack_pal8:
-                # Palette-based: try raw / RLE, pick smallest
-                w, h, pal565, idx, alpha_data = pack_pal8(p, with_alpha)
-                # Pack palette as uint16_t (compact), uint32_t word-fill done at decode time
-                pal_bytes = struct.pack("<256H", *(list(pal565) + [0] * (256 - len(pal565))))
-                raw_idx = struct.pack(f"<{w*h}B", *idx)
+                # Palette-based: try PAL RLE vs RGB565 RLE, pick smallest
+                w, h, pal565, pal_bits, idx, alpha_data = pack_pal8(p, with_alpha)
+                # Pack palette at actual size (dynamic, not padded to 256)
+                # Pad palette to declared power-of-2 size so decoder sees exactly palCount entries
+                pal_count = 1 << pal_bits
+                pal_bytes = struct.pack(f"<{pal_count}H", *(list(pal565) + [0] * (pal_count - len(pal565))))
+                palette_bits = pal_bits
 
                 if with_alpha and alpha_data and has_meaningful_alpha(alpha_data):
-                    raw_alpha = struct.pack(f"<{w*h}B", *alpha_data)
-                    raw_chunk = pal_bytes + raw_idx + raw_alpha
-                    rle_chunk = pal_bytes + encode_rle(idx, w, h, alpha=alpha_data)
-                    if len(rle_chunk) < len(raw_chunk):
-                        chunk, actual_fmt = rle_chunk, FMT_PAL8_ALPHA_RLE
-                    else:
-                        chunk, actual_fmt = raw_chunk, FMT_PAL8_ALPHA
+                    # Alpha image: compete PAL_ALPHA_RLE vs RGB565A_RLE
+                    pal_rle_chunk = pal_bytes + encode_rle(idx, w, h, alpha=alpha_data)
+                    pixels = [pal565[i] for i in idx]
+                    rgb565a_rle = encode_rle_rgb565_alpha(pixels, alpha_data, w, h)
+                    choices = [(len(pal_rle_chunk), FMT_PAL_ALPHA_RLE, pal_rle_chunk)]
+                    if rgb565a_rle is not None:
+                        choices.append((len(rgb565a_rle), FMT_RGB565A_RLE, rgb565a_rle))
+                    best = min(choices, key=lambda x: x[0])
+                    _, actual_fmt, chunk = best
                 else:
-                    # Opaque: try PAL8 raw, PAL8_RLE, RGB565_RLE
-                    raw_chunk = pal_bytes + raw_idx
-                    rle_chunk = pal_bytes + encode_rle(idx, w, h)
-                    # Also try RGB565_RLE (direct color, no palette)
-                    pixels = [pal565[i] for i in idx]  # map index→RGB565
+                    # Opaque image: compete PAL_RLE vs RGB565_RLE
+                    pal_rle_chunk = pal_bytes + encode_rle(idx, w, h)
+                    pixels = [pal565[i] for i in idx]
                     rgb565_rle = rle_encode_rgb565(pixels, w, h)
-                    choices = [(len(raw_chunk), FMT_PAL8, raw_chunk)]
-                    choices.append((len(rle_chunk), FMT_PAL8_RLE, rle_chunk))
+                    choices = [(len(pal_rle_chunk), FMT_PAL_RLE, pal_rle_chunk)]
                     if rgb565_rle is not None:
                         choices.append((len(rgb565_rle), FMT_RGB565_RLE, rgb565_rle))
                     best = min(choices, key=lambda x: x[0])
                     _, actual_fmt, chunk = best
 
             entry = {
-                "id":     len(all_entries),
-                "name":   name,
-                "prefix": prefix,
-                "width":  w,
-                "height": h,
-                "fmt":    actual_fmt,
-                "offset": 0,
-                "size":   0,
-                "chunk":  chunk,
+                "id":         len(all_entries),
+                "name":       name,
+                "prefix":     file_prefix,
+                "width":      w,
+                "height":     h,
+                "formatInfo": make_format_info(actual_fmt, palette_bits),
+                "fmt":        actual_fmt,   # for display only
+                "palBits":    palette_bits,  # for display only
+                "offset":     0,
+                "size":       0,
+                "chunk":      chunk,
             }
             all_entries.append(entry)
-            print(f"    {prefix}{name:20s} {w}x{h}  fmt={actual_fmt}  {len(chunk)}B")
+            print(f"    {file_prefix}{name:20s} {w}x{h}  fmt={actual_fmt} palBits={palette_bits}  {len(chunk)}B")
 
-    # Sin table — only if rotatable/ has images
+    # Sin table — triggered by R_ prefix images (alpha/ files named r_*.png)
     rot_count = sum(1 for e in all_entries if e["prefix"] == PRE_ROT)
     sin_table = generate_sin_table() if rot_count > 0 else None
     if sin_table:

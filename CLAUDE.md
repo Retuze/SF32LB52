@@ -258,7 +258,7 @@ drawImage 比 benchmark 慢 29% 是合理的：
 
 ### 资源打包（重要陷阱）
 
-`res_images.bin` 由 `tools/pack_res.py` **手动**生成，是 checked-in 预生成文件，**不在 CMake 构建流程里**。改了 `ui/hello_litho/{opaque,alpha,gray,rotate}/` 下的源图后必须手动重打包：
+`res_images.bin` 由 `tools/pack_res.py` **手动**生成，是 checked-in 预生成文件，**不在 CMake 构建流程里**。改了 `ui/hello_litho/{tint,solid,alpha}/` 下的源图后必须手动重打包：
 
 ```bash
 python components/lithoui/tools/pack_res.py components/lithoui/ui/hello_litho components/lithoui/generated
@@ -268,27 +268,32 @@ python components/lithoui/tools/pack_res.py components/lithoui/ui/hello_litho co
 
 ### 格式选择与 ImageView
 
-3 种统一 RLE 格式，每条记录 `[value][length]`（2 字节），行偏移表 O(1) 跳行：
+5 种统一 RLE 格式（v3），format + paletteBits 共用一个 uint8_t（`LITHO_FORMAT` / `LITHO_PALETTE_BITS` / `LITHO_PALETTE_SIZE` 宏解析）。
 
-| 源目录 | 前缀 | 格式 | 编码 |
-|--------|------|------|------|
-| `opaque/` | (无) | FMT_PAL8_RLE (1) | `[idx][len]` len=count-1 (1~256) |
-| `alpha/` | `A_` | FMT_PAL8_RLE_ALPHA (2) | bit7=0 不透(1~128); bit7=1 透, bits5:4=alpha(0/85/170/255), bits2:0=count-1(1~8) |
-| `gray/` | `G_` | FMT_A8_RLE (0) | `[gray][len]` len=count-1 (1~256), tint 着色 |
-| `rotate/` | `R_` | FMT_PAL8_RLE_ALPHA (2) | 同上 + 触发 sin 表 |
+**资源目录：**
 
-`ImageView::onDraw` 按 `e->format` 分派：fmt=0→A8 RLE 解码 (tint LUT)、fmt=1→PAL8 word-fill、fmt=2→PAL8 + pass2 alpha blend。
-alpha 内联在 RLE 流中，无独立 `imageAlpha()` 平面。`ImageView(ImageId)` 默认跟图片原生尺寸。
+| 目录 | 前缀 | 格式 | 说明 |
+|------|------|------|------|
+| `tint/` | `G_` | FMT_A8_RLE (0) | 灰度图，运行时 tint 着色 |
+| `solid/` | (无) | FMT_PAL_RLE (1) 或 FMT_RGB565_RLE (3) | 不透明图 |
+| `alpha/` | `A_` | FMT_PAL_ALPHA_RLE (2) 或 FMT_RGB565A_RLE (4) | 带透明度 |
+| `alpha/r_*.png` | `R_` | 同上 | 可旋转 (自动触发 sin 表) |
 
-### 图片格式（v2 — 统一 RLE）
+`ImageView::onDraw` 按 `e->formatInfo` 获取 format + paletteBits，`Painter::drawImage` 内部 `LITHO_FORMAT(fmt)` 分派到 5 个解码路径。
+alpha 内联在 RLE 流中，无独立 `imageAlpha()` 平面。
 
-全部采用统一 RLE 编码，每条记录 `[value][length]`（2 字节），行偏移表 O(1) 跳行。
+### 图片格式（v3 — 5 种 RLE）
 
 | 格式 | 枚举值 | 编码 | 用途 |
 |------|--------|------|------|
-| FMT_A8_RLE | 0 | `[gray][len]` len=count-1 (1~256) | 灰度 tint |
-| FMT_PAL8_RLE | 1 | `[idx][len]` len=count-1 (1~256), 512B palette | 不透 |
-| FMT_PAL8_RLE_ALPHA | 2 | bit7=0→不透(1~128); bit7=1→alpha 4档(0/85/170/255)+count(1~8), 512B palette | 带透明度 |
+| FMT_A8_RLE | 0 | `[gray][len]` len=1~256 | 灰度 + 动态 tint 着色 |
+| FMT_PAL_RLE | 1 | `[idx][len]` len=1~256, RGB565 pal (2^palBits项) | 不透, 调色板动态尺寸 |
+| FMT_PAL_ALPHA_RLE | 2 | `[idx][flags\|len]` bit7=0→不透(1~128); bit7=1→alpha 4档+len(1~32) | 带透明度, alpha内联 |
+| FMT_RGB565_RLE | 3 | `[cmd][c_lo][c_hi]` run/literal 命令编码 | 不透明直接色, 无调色板 |
+| FMT_RGB565A_RLE | 4 | `[c_lo][c_hi][flags\|len]` 同 format 2 的 alpha 编码 | 直接色带透明度 |
+
+PAL 格式的调色板动态尺寸：pack 时按实际使用颜色数向上取整到 2 的幂（paletteBits=1~8），不再固定 512 字节。
+format 1/3（不透明）和 2/4（带透明）的渲染路径分开——不透明路径直接写 framebuffer，透明路径读-改-写 blend。
 
 ### 压缩率
 

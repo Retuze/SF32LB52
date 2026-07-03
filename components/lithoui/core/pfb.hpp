@@ -74,6 +74,14 @@ public:
     //   3. Call `draw(painter, bx, by, bw, bh)` — client draws the view tree
     //   4. bitblt the tile to the display
     //   5. Release the tile back to the pool
+    /** Set a one-shot hook called after the first tile is rendered but before
+     *  its xfer is submitted. Typically used to wait for TE (vsync) so the
+     *  first tile is pre-rendered and xfer starts immediately after TE. */
+    void setPreXferHook(void (*hook)(void*), void* ctx) {
+        mPreXferHook = hook;
+        mPreXferHookCtx = ctx;
+    }
+
     template<typename Display, typename DrawFn, typename IdleFn>
     void drawRegion(const Region& region, Display& display, DrawFn&& draw,
                     IdleFn&& onIdle) {
@@ -121,6 +129,8 @@ public:
             }
         };
 
+        bool isFirstTile = true;
+
         for (int row = r0; row < r1; row++) {
             for (int col = c0; col < c1; col++) {
                 int bx = col * mBlockW;
@@ -146,6 +156,13 @@ public:
                 painter.setTileIdx((uint8_t)row);
                 draw(painter, bx, by, bw, bh);
                 uint32_t ts2 = DWT_CYCCNT;
+
+                // Pre-xfer hook: wait for TE after pre-rendering the first tile
+                if (isFirstTile && mPreXferHook) {
+                    isFirstTile = false;
+                    mPreXferHook(mPreXferHookCtx);
+                    mPreXferHook = nullptr;  // one-shot
+                }
 
                 // Find free async slot
                 int slotIndex = -1;
@@ -239,6 +256,9 @@ private:
     uint16_t* mPoolBufs  = nullptr;
     int*      mFreeList  = nullptr;
     int       mFreeCount = 0;
+
+    void (*mPreXferHook)(void*) = nullptr;
+    void*  mPreXferHookCtx = nullptr;
 
     uint32_t  mStatSetup = 0;
     uint32_t  mStatDraw  = 0;

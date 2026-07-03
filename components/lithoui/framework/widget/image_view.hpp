@@ -124,16 +124,14 @@ public:
             const ImageEntry* e    = imageEntry(mImageId);
             const void*       src  = (const void*)imagePixels(mImageId);
             const RGB565*     tint = mHasTint ? &mTint : nullptr;
-            const int         fmt  = e->format;
-            // Alpha is inline in RLE stream for new formats — no separate mask
-            const uint8_t* mask = nullptr;
+            const int         fmt  = e->formatInfo;
 
             if (mHasAngle) {
                 p.drawImageRotatedDeci(src, fmt, e->width, e->height,
                                    0, 0, mPivotX, mPivotY, mAngleDeci,
-                                   mask, tint);
+                                   tint);
             } else {
-                p.drawImage(src, fmt, e->width, e->height, 0, 0, mask, tint);
+                p.drawImage(src, fmt, e->width, e->height, 0, 0, tint);
             }
         } else {
             p.fillRect(0, 0, mWidth, mHeight, RGB565::fromRGB(64, 160, 64));
