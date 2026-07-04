@@ -1,15 +1,14 @@
 #pragma once
 #include <stdint.h>
+#include <stdio.h>
 #include "port/display_adapter.hpp"
 #include "hal.h"  // DWT_CYCCNT
 
 extern "C" {
 /* LCD framework API — components/bsp/lcd/ (lcd.c + lcd_bus_*.c) */
 void     lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
-                    const uint16_t* rgb565);
-void     lcd_bitblt_async(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
-                          const uint16_t* rgb565,
-                          void (*done)(void* ctx), void* ctx);
+                    const uint16_t* rgb565,
+                    void (*done)(void* ctx), void* ctx);
 void     lcd_wait_idle(void);
 uint32_t lcd_xfer_cycles(void);
 void     lcd_clear_xfer_cycles(void);
@@ -29,7 +28,7 @@ public:
     void bitblt(const uint16_t* data, int x, int y, int w, int h) override {
         if (!data || w <= 0 || h <= 0) return;
         uint32_t t0 = DWT_CYCCNT;
-        lcd_bitblt((uint16_t)x, (uint16_t)y, (uint16_t)w, (uint16_t)h, data);
+        lcd_bitblt((uint16_t)x, (uint16_t)y, (uint16_t)w, (uint16_t)h, data, nullptr, nullptr);
         mTransferCycles += DWT_CYCCNT - t0;
     }
 
@@ -39,9 +38,9 @@ public:
             if (done) done(ctx);
             return;
         }
-        lcd_bitblt_async((uint16_t)x, (uint16_t)y,
-                         (uint16_t)w, (uint16_t)h,
-                         data, done, ctx);
+        lcd_bitblt((uint16_t)x, (uint16_t)y,
+                   (uint16_t)w, (uint16_t)h,
+                   data, done, ctx);
     }
 
     void waitReady() override { lcd_wait_idle(); }

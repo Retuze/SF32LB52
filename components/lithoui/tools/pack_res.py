@@ -130,12 +130,19 @@ def encode_rle(values, w, h, alpha=None):
                     run += 1
 
                 if a_cur == 0:
-                    out.append(run - 1)
-                elif a_cur == 3:
-                    out.append(0x40 | (run - 1))
+                    # TT=00 → alpha=0 (transparent, no color data)
+                    out.append(0x00 | (run - 1))
+                elif a_cur == 1:
+                    # TT=10 → alpha=85 (semi-transparent)
+                    out.append(0x80 | (run - 1))
                     out.append(v)
-                else:
-                    out.append((a_cur << 6) | (run - 1))
+                elif a_cur == 2:
+                    # TT=11 → alpha=170 (semi-transparent)
+                    out.append(0xC0 | (run - 1))
+                    out.append(v)
+                else:  # a_cur == 3
+                    # TT=01 → alpha=255 (opaque)
+                    out.append(0x40 | (run - 1))
                     out.append(v)
                 x += run
             else:

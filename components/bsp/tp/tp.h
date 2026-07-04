@@ -29,7 +29,7 @@ extern "C" {
  * For SPI: uses hardware or bit-bang SPI.
  */
 typedef struct tp_bus {
-    void (*init)(const void *config);  /* config = bb_i2c_t* for I2C bus */
+    void (*init)(void);
     int  (*read)(uint8_t dev_addr, uint8_t reg, uint8_t *data, uint16_t len);
     int  (*write)(uint8_t dev_addr, uint8_t reg, const uint8_t *data, uint16_t len);
 } tp_bus_t;
@@ -60,7 +60,7 @@ enum {
 
 /* ── Registration ────────────────────────────────────────────────────── */
 
-void tp_set_bus(const tp_bus_t *bus, const void *bus_config);
+void tp_set_bus(const tp_bus_t *bus);
 void tp_set_ic(const tp_ic_t *ic);
 void tp_set_ctrl_pins(uint32_t rst, uint32_t irq);
 

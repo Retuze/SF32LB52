@@ -13,7 +13,7 @@
 static void ic_write(const lcd_bus_t *b, uint8_t cmd, const uint8_t *p, uint32_t n)
 {
     b->begin();
-    b->cmd_write(cmd, p, n);
+    b->send(cmd, p, n);
     b->end();
 }
 
@@ -55,13 +55,17 @@ static int co5300_init(const lcd_bus_t *b)
     ic_write(b,0x2A, (const uint8_t*)"\x00\x00\x01\x86", 4);
     ic_write(b,0x2B, (const uint8_t*)"\x00\x00\x01\xC2", 4);
 
-    /* Read panel ID before sleep-out in case the panel needs it */
+    /* Read panel ID at low speed */
     {
         uint8_t id[3] = {0};
+        if (b->set_speed)
+            b->set_speed(LCD_SPEED_READ_HZ);  /* 10 MHz for register read */
         b->begin();
-        b->cmd_read(0x04, id, 3);
+        b->read(0x04, id, 3);
         b->end();
         printf("[co5300] ID: %02X %02X %02X\n", id[0], id[1], id[2]);
+        if (b->set_speed)
+            b->set_speed(LCD_SPEED_FAST_HZ);  /* restore pixel xfer speed */
     }
 
     ic_write(b,0x11, NULL, 0);
@@ -88,7 +92,7 @@ static uint32_t co5300_read_id(const lcd_bus_t *b)
 {
     uint8_t id[3] = {0};
     b->begin();
-    b->cmd_read(0x04, id, 3);
+    b->read(0x04, id, 3);
     b->end();
     printf("[co5300] ID: %02X %02X %02X\n", id[0], id[1], id[2]);
     return ((uint32_t)id[0] << 16) | ((uint32_t)id[1] << 8) | id[2];

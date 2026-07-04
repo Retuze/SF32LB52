@@ -66,36 +66,47 @@ private:
     bool mTracking = false;
 };
 
+/* ColorBox — simple solid color rectangle for testing */
+class ColorBox : public View {
+public:
+    explicit ColorBox(RGB565 color) : mColor(color) {}
+
+    void onDraw(Painter& p) override {
+        p.fillRect(0, 0, mBounds.width, mBounds.height, mColor);
+    }
+
+private:
+    RGB565 mColor;
+};
+
 class GalleryActivity : public Activity {
 public:
     void onCreate(Bundle&) override {
-        auto* root = new ScrollableRoot();
+        auto* root = new ViewGroup();
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
 
-        static const int kCols = 3, kIconW = 100, kIconH = 100;
-        static const int kGapX = (kScreenW - kCols * kIconW) / (kCols + 1);
+        // Simple color blocks instead of images - test rendering pipeline
+        static const int kCols = 3, kBoxW = 100, kBoxH = 100;
+        static const int kGapX = (kScreenW - kCols * kBoxW) / (kCols + 1);
         static const int kGapY = 15, kStartY = 40;
-        static const int kBoxH = kStartY + 4 * (kIconH + kGapY) + 100;
 
-        auto* iconBox = new ViewGroup();
-        iconBox->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kBoxH};
-        root->addView(iconBox);
-        root->setScrollTarget(iconBox);
-
-        ImageId alphaIcons[] = {
-            IMG_A_DIAL, IMG_A_MESSAGES, IMG_A_MUSIC,
-            IMG_A_SETTINGS, IMG_A_CAMERA, IMG_A_WEATHER,
-            IMG_A_CALENDAR, IMG_A_COMPASS, IMG_A_SPORTS,
-            IMG_A_SLEEP, IMG_A_ALARM, IMG_A_STOPWATCH,
+        RGB565 colors[] = {
+            RGB565::fromRGB(255, 0, 0),    // red
+            RGB565::fromRGB(0, 255, 0),    // green
+            RGB565::fromRGB(0, 0, 255),    // blue
+            RGB565::fromRGB(255, 255, 0),  // yellow
+            RGB565::fromRGB(255, 0, 255),  // magenta
+            RGB565::fromRGB(0, 255, 255),  // cyan
         };
-        for (int i = 0; i < (int)(sizeof(alphaIcons)/sizeof(alphaIcons[0])); i++) {
-            int cx = kGapX + (i % kCols) * (kIconW + kGapX);
-            int cy = kStartY + (i / kCols) * (kIconH + kGapY);
-            auto* iv = new ImageView(alphaIcons[i]);
-            iv->bounds().x = (int16_t)cx;
-            iv->bounds().y = (int16_t)cy;
-            iconBox->addView(iv);
+
+        for (int i = 0; i < 6; i++) {
+            int cx = kGapX + (i % kCols) * (kBoxW + kGapX);
+            int cy = kStartY + (i / kCols) * (kBoxH + kGapY);
+
+            auto* colorBox = new ColorBox(colors[i]);
+            colorBox->bounds() = {(int16_t)cx, (int16_t)cy, (int16_t)kBoxW, (int16_t)kBoxH};
+            root->addView(colorBox);
         }
     }
 
@@ -107,14 +118,11 @@ public:
 
 extern "C" int main()
 {
-    printf("\r\n[litho] Gallery (LCDC)\r\n");
+    printf("[litho] start\r\n");
     clk_set_hz(HCLK_240MHZ);
-
     cache_enable();
-    printf("[litho] I+D Cache + MPI2 prefetch ON\r\n");
 
-    SF32Input input;  /* touch init before LCDC — avoids pinmux conflict */
-
+    SF32Input input;
     board_lcd_init();
 
     SF32Display display;
@@ -129,6 +137,7 @@ extern "C" int main()
     intent.target = "Gallery";
     am.startActivity(intent);
 
+    printf("[litho] loop start\r\n");
     while (true) {
         wm.invalidateAll();
         wm.runOnce();

@@ -24,6 +24,11 @@
 extern "C" {
 #endif
 
+/* ── Bus speed constants ────────────────────────────────────────────────── */
+
+#define LCD_SPEED_READ_HZ  10000000U  /* Register read (ID, status) */
+#define LCD_SPEED_FAST_HZ  48000000U  /* Pixel transfer */
+
 /* ── Bus ──────────────────────────────────────────────────────────────── */
 
 /**
@@ -36,8 +41,15 @@ typedef struct lcd_bus {
     void (*begin)(void);
     void (*end)(void);
 
-    void (*cmd_write)(uint8_t cmd, const uint8_t *param, uint32_t param_len);
-    void (*cmd_read) (uint8_t cmd, uint8_t *data, uint32_t data_len);
+    void (*send)(uint8_t cmd, const uint8_t *data, uint32_t len);
+    void (*read)(uint8_t cmd, uint8_t *data, uint32_t len);
+
+    /**
+     * Set bus clock frequency.  Called before register reads (e.g. ID check)
+     * to run at a lower speed, then restored for pixel transfers.
+     * NULL or no-op for fixed-speed buses (e.g. GPIO bit-bang).
+     */
+    void (*set_speed)(uint32_t hz);
 } lcd_bus_t;
 
 /* ── IC ───────────────────────────────────────────────────────────────── */
@@ -60,7 +72,6 @@ void lcd_set_ctrl_pins(uint32_t rst, uint32_t bl);
 /* ── Public API ──────────────────────────────────────────────────────── */
 
 int      lcd_init(void);
-void     lcd_bus_init(void);  /* weak — overridden by bus driver for post-init */
 void     lcd_sleep(int on);
 uint32_t lcd_read_id(void);
 
@@ -68,13 +79,13 @@ void lcd_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1);
 void lcd_fill_rect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t color);
 void lcd_fill_color(uint16_t color);
 void lcd_draw_pixel(uint16_t x, uint16_t y, uint16_t color);
-void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *rgb565);
 
-/* Async bitblt — weak defaults in lcd.c, overridden by LCDC bus driver */
-void lcd_bitblt_async(uint16_t x, uint16_t y,
-                      uint16_t w, uint16_t h,
-                      const uint16_t *rgb565,
-                      void (*done)(void *ctx), void *ctx);
+/* Bitblt — weak default (blocking), overridden by LCDC bus driver (async DMA) */
+void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
+                const uint16_t *rgb565,
+                void (*done)(void *ctx), void *ctx);
+
+/* Async support helpers — weak defaults, overridden by LCDC bus driver */
 void lcd_wait_idle(void);
 uint32_t lcd_xfer_cycles(void);
 void     lcd_clear_xfer_cycles(void);

@@ -1,9 +1,11 @@
 /**
  * @file lcd_bus_qspi_lcdc.c
- * @brief QSPI bus driver — hardware LCDC DMA.
+ * @brief QSPI bus driver — hardware LCDC with single-line init + DMA pixel transfer.
  *
- * Overrides the weak lcd_* symbols in lcd.c with LCDC hardware-accelerated
- * paths.  Complements lcd_bus_qspi_gpio.c (bit-bang) which handles panel init.
+ * Complete standalone bus implementation:
+ * - Low-speed single-line command/data for panel init (read ID, write config)
+ * - High-speed quad-line DMA for pixel transfer
+ * - No dependency on GPIO bit-bang
  */
 
 #include "lcd.h"
@@ -22,9 +24,7 @@
 #define LCDC_SPI_WRITE_RAM_CMD 0x32U
 
 #define LCDC1_IRQN             63U
-#ifndef LCDC_QSPI_FREQ_HZ
-#define LCDC_QSPI_FREQ_HZ      50000000U
-#endif
+#define LCDC_QSPI_FREQ_HZ  LCD_SPEED_FAST_HZ
 
 /* ── Static state ──────────────────────────────────────────────────────── */
 
@@ -52,41 +52,106 @@ static void dcache_clean_by_addr(const void *addr, uint32_t size)
 
 /* ── Pinmux ────────────────────────────────────────────────────────────── */
 
-static void lcdc_pinmux_inner(void)
+static void lcdc_pinmux(void)
 {
     pinmux_clk_enable();
 
+    const uint32_t fsel = 1;  /* LCDC function */
     const uint32_t flags = PINMUX_PULL_NONE | PINMUX_DRIVE_3 | PINMUX_INPUT_ENABLE;
-    uint32_t cfg = flags & (PINMUX_PULL_ENABLE | PINMUX_PULL_UP_SEL |
-                             PINMUX_INPUT_ENABLE | PINMUX_INPUT_SCHMITT |
-                             PINMUX_SLEW_SLOW | PINMUX_DRIVE_Msk);
-    cfg |= (1U << PINMUX_FSEL_Pos) & PINMUX_FSEL_Msk;  /* fsel=1 → LCDC */
-
-#define LCDC_WRITE_PAD(pin) do {                              \
-    HPSYS_PINMUX->PAD[PA_PAD_OFFSET + (pin)].R = cfg;        \
-    __asm volatile("dsb" ::: "memory");                       \
-    (void)HPSYS_PINMUX->PAD[PA_PAD_OFFSET + (pin)].R;        \
-} while(0)
 
     /* LCD_TE is managed by lcd.c as GPIO EXTI — skip here */
-    LCDC_WRITE_PAD(LCD_CS);
-    LCDC_WRITE_PAD(LCD_CLK);
-    LCDC_WRITE_PAD(LCD_D0);
-    LCDC_WRITE_PAD(LCD_D1);
-    LCDC_WRITE_PAD(LCD_D2);
-    LCDC_WRITE_PAD(LCD_D3);
-
-#undef LCDC_WRITE_PAD
+    pinmux_config(LCD_CS,  fsel, flags);
+    pinmux_config(LCD_CLK, fsel, flags);
+    pinmux_config(LCD_D0,  fsel, flags);
+    pinmux_config(LCD_D1,  fsel, flags);
+    pinmux_config(LCD_D2,  fsel, flags);
+    pinmux_config(LCD_D3,  fsel, flags);
 }
 
-/* ── Register I/O ──────────────────────────────────────────────────────── */
+/* ── LCDC hardware init ────────────────────────────────────────────────── */
+
+static void lcdc_xfer_done(LCDC_HandleTypeDef *lcdc);  /* forward declaration */
+
+static void lcdc_hw_init(void)
+{
+    memset(&s_lcdc, 0, sizeof s_lcdc);
+    lcdc_pinmux();
+
+    s_lcdc.Instance = LCDC1;
+    s_lcdc.Init.lcd_itf = LCDC_INTF_SPI_DCX_4DATA;
+    s_lcdc.Init.freq = LCDC_QSPI_FREQ_HZ;
+    s_lcdc.Init.color_mode = LCDC_PIXEL_FORMAT_RGB565;
+    s_lcdc.Init.cfg.spi.dummy_clock = 0;
+    s_lcdc.Init.cfg.spi.syn_mode = HAL_LCDC_SYNC_DISABLE;
+    s_lcdc.Init.cfg.spi.cs_polarity = 0;
+    s_lcdc.Init.cfg.spi.clk_polarity = 0;
+    s_lcdc.Init.cfg.spi.clk_phase = 0;
+    s_lcdc.Init.cfg.spi.bytes_gap_us = 0;
+    s_lcdc.Init.cfg.spi.vsyn_polarity = 1;
+    s_lcdc.Init.cfg.spi.vsyn_delay_us = 0;
+    s_lcdc.Init.cfg.spi.hsyn_num = 0;
+    s_lcdc.XferCpltCallback = lcdc_xfer_done;  /* async bitblt callback */
+
+    HAL_LCDC_Init(&s_lcdc);
+    nvic_enable_irq(LCDC1_IRQN);
+
+    printf("[lcdc_bus] hardware initialized @ %u Hz\r\n", LCDC_QSPI_FREQ_HZ);
+}
+
+/* ── Bus layer interface ───────────────────────────────────────────────── */
+
+static void lcdc_init(void)
+{
+    lcdc_hw_init();
+}
+
+static void lcdc_begin(void)
+{
+    /* CS handled by LCDC hardware */
+}
+
+static void lcdc_end(void)
+{
+    /* CS handled by LCDC hardware */
+}
+
+static void lcdc_send(uint8_t cmd, const uint8_t *data, uint32_t len)
+{
+    uint32_t c = (cmd == REG_WRITE_RAM) ?
+                 ((LCDC_SPI_WRITE_RAM_CMD << 24) | ((uint32_t)cmd << 8)) :
+                 ((LCDC_SPI_WRITE_CMD << 24) | ((uint32_t)cmd << 8));
+    HAL_LCDC_WriteU32Reg(&s_lcdc, c, (uint8_t *)data, len);
+}
+
+static void lcdc_read(uint8_t cmd, uint8_t *data, uint32_t len)
+{
+    HAL_LCDC_ReadU8Reg(&s_lcdc, cmd, data, len);
+}
+
+/* ── Speed switching ──────────────────────────────────────────────────── */
+
+static void lcdc_set_speed(uint32_t hz)
+{
+    s_lcdc.Init.freq = hz;
+    HAL_LCDC_Init(&s_lcdc);
+}
+
+/* ── Bus vtable ────────────────────────────────────────────────────────── */
+
+const lcd_bus_t lcd_bus_qspi_lcdc = {
+    .init      = lcdc_init,
+    .begin     = lcdc_begin,
+    .end       = lcdc_end,
+    .send      = lcdc_send,
+    .read      = lcdc_read,
+    .set_speed = lcdc_set_speed,
+};
+
+/* ── Register I/O (legacy helpers, used by set_window below) ──────────────── */
 
 static void lcdc_write_reg(uint16_t reg, const uint8_t *data, uint32_t len)
 {
-    uint32_t cmd = (reg == REG_WRITE_RAM) ?
-                   ((LCDC_SPI_WRITE_RAM_CMD << 24) | ((uint32_t)reg << 8)) :
-                   ((LCDC_SPI_WRITE_CMD << 24) | ((uint32_t)reg << 8));
-    HAL_LCDC_WriteU32Reg(&s_lcdc, cmd, (uint8_t *)data, len);
+    lcdc_send((uint8_t)reg, data, len);
 }
 
 static void lcdc_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
@@ -124,35 +189,7 @@ void LCDC1_IRQHandler(void)
     HAL_LCDC_IRQHandler(&s_lcdc);
 }
 
-/* ── Bus post-init (override lcd.c weak) ───────────────────────────────── */
-
-void lcd_bus_init(void)
-{
-    memset(&s_lcdc, 0, sizeof s_lcdc);
-    lcdc_pinmux_inner();
-
-    s_lcdc.Instance = LCDC1;
-    s_lcdc.Init.lcd_itf = LCDC_INTF_SPI_DCX_4DATA;
-    s_lcdc.Init.freq = LCDC_QSPI_FREQ_HZ;
-    s_lcdc.Init.color_mode = LCDC_PIXEL_FORMAT_RGB565;
-    s_lcdc.Init.cfg.spi.dummy_clock = 0;
-    s_lcdc.Init.cfg.spi.syn_mode = HAL_LCDC_SYNC_DISABLE;
-    s_lcdc.Init.cfg.spi.cs_polarity = 0;
-    s_lcdc.Init.cfg.spi.clk_polarity = 0;
-    s_lcdc.Init.cfg.spi.clk_phase = 0;
-    s_lcdc.Init.cfg.spi.bytes_gap_us = 0;
-    s_lcdc.Init.cfg.spi.vsyn_polarity = 1;
-    s_lcdc.Init.cfg.spi.vsyn_delay_us = 0;
-    s_lcdc.Init.cfg.spi.hsyn_num = 0;
-    s_lcdc.XferCpltCallback = lcdc_xfer_done;
-
-    HAL_LCDC_Init(&s_lcdc);
-    nvic_enable_irq(LCDC1_IRQN);
-
-    printf("[lcdc] pixel DMA activated\r\n");
-}
-
-/* ── Async bitblt (override lcd.c weak) ────────────────────────────────── */
+/* ── Async bitblt (override lcd.c weak) ────────────────────────────────────── */
 
 void lcd_wait_idle(void)
 {
@@ -165,10 +202,11 @@ int lcd_is_busy(void)
     return s_busy;
 }
 
-void lcd_bitblt_async(uint16_t x, uint16_t y,
-                      uint16_t w, uint16_t h,
-                      const uint16_t *rgb565,
-                      void (*done)(void *ctx), void *ctx)
+/* Override weak lcd_bitblt with LCDC async DMA version */
+void lcd_bitblt(uint16_t x, uint16_t y,
+                uint16_t w, uint16_t h,
+                const uint16_t *rgb565,
+                void (*done)(void *ctx), void *ctx)
 {
     if (rgb565 == NULL || w == 0U || h == 0U) {
         if (done != NULL) done(ctx);

@@ -6,7 +6,6 @@
  */
 
 #include "tp.h"
-#include "bb_i2c.h"
 #include <stdio.h>
 
 /* ==========================================================================
@@ -25,29 +24,12 @@
 #define FT6146_MAX_POINTS 2
 
 /* ==========================================================================
- * I2C bus scan helper
- * ========================================================================== */
-
-static void print_addr(uint8_t addr, void *user)
-{
-    (void)user;
-    printf(" 0x%02X", (unsigned)addr);
-}
-
-/* ==========================================================================
  * IC driver implementation
  * ========================================================================== */
 
 static int ft6146_init(const tp_bus_t *bus, uint8_t dev_addr)
 {
-    /* 1. I2C bus scan */
-    printf("[ft6146] I2C scan: ");
-    extern const void *_tp_bus_config_ptr;
-    const bb_i2c_t *i2c = (const bb_i2c_t *)_tp_bus_config_ptr;
-    bb_i2c_scan(i2c, print_addr, NULL);
-    printf("\r\n");
-
-    /* 2. Chip ID verification */
+    /* Chip ID verification */
     uint8_t id_h = 0, id_l = 0;
     if (bus->read(dev_addr, FT_REG_READ_ID_H, &id_h, 1U) == 0 &&
         bus->read(dev_addr, FT_REG_READ_ID_L, &id_l, 1U) == 0) {

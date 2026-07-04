@@ -13,15 +13,11 @@
 static struct {
     const tp_bus_t *bus;
     const tp_ic_t  *ic;
-    const void     *bus_config;  /* e.g., bb_i2c_t* for I2C bus */
     uint32_t pin_rst, pin_irq;
     uint8_t  dev_addr;
 } g = {
     .pin_rst = 0xFFFFFFFF, .pin_irq = 0xFFFFFFFF
 };
-
-/* Expose bus_config for bus drivers (read-only) */
-const void *_tp_bus_config_ptr = NULL;
 
 /* ── IRQ signaling ────────────────────────────────────────────────────── */
 
@@ -50,13 +46,9 @@ static void tp_irq_cb(uint32_t pin, void *arg)
 
 /* ── Registration ─────────────────────────────────────────────────────── */
 
-void tp_set_bus(const tp_bus_t *b, const void *cfg) {
-    g.bus = b;
-    g.bus_config = cfg;
-    _tp_bus_config_ptr = cfg;  /* sync for bus drivers */
-}
-void tp_set_ic(const tp_ic_t *i)                     { g.ic = i; g.dev_addr = i->dev_addr; }
-void tp_set_ctrl_pins(uint32_t rst, uint32_t irq)   { g.pin_rst = rst; g.pin_irq = irq; }
+void tp_set_bus(const tp_bus_t *b) { g.bus = b; }
+void tp_set_ic(const tp_ic_t *i)   { g.ic = i; g.dev_addr = i->dev_addr; }
+void tp_set_ctrl_pins(uint32_t rst, uint32_t irq) { g.pin_rst = rst; g.pin_irq = irq; }
 
 /* ── Init ─────────────────────────────────────────────────────────────── */
 
@@ -64,8 +56,8 @@ int tp_init(void)
 {
     if (!g.bus || !g.ic) return -1;
 
-    /* 1. Initialize bus (e.g., configure I2C pins) */
-    g.bus->init(g.bus_config);
+    /* 1. Initialize bus (pins from board.h) */
+    g.bus->init();
 
     /* 2. Configure RST & IRQ pins */
     if (g.pin_rst != 0xFFFFFFFF) {

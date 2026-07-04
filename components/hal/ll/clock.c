@@ -6,6 +6,22 @@
 #include "clock.h"
 #include "SF32LB52.h"
 
+/* ── DWT cycle counter (Cortex-M33) ───────────────────────────────────── */
+
+#ifndef DWT_CYCCNT
+#define DWT_CYCCNT  (*(volatile uint32_t *)0xE0001004UL)
+#endif
+
+uint32_t dwt_cycles(void)
+{
+    return DWT_CYCCNT;
+}
+
+uint32_t dwt_cycles_to_us(uint32_t cyc, uint32_t hclk_hz)
+{
+    return (uint32_t)(((uint64_t)cyc * 1000000ULL) / (uint64_t)hclk_hz);
+}
+
 /* ── RCC register fields ──────────────────────────────────────────────── */
 
 #define CSR_SEL_SYS_Pos   0U

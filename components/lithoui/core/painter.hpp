@@ -4,9 +4,7 @@
 #include "res_images.h"
 #include <stdio.h>
 #include <string.h>
-#ifndef DWT_CYCCNT
-#define DWT_CYCCNT (*(volatile uint32_t*)0xE0001004UL)
-#endif
+#include "hal.h"  // dwt_cycles()
 
 // Image formats — defined in res_images.h:
 //   FMT_A8_RLE = 0        grayscale RLE, tint coloring, opaque
@@ -149,9 +147,11 @@ public:
     void drawImage(const void* src, int fmt,
                    int srcW, int srcH, int dx, int dy,
                    const RGB565* tint = nullptr) {
+        printf("[drawImage] fmt=%d w=%d h=%d\r\n", fmt, srcW, srcH);
 
         int imageFormat = LITHO_FORMAT(fmt);
         int paletteSize = LITHO_PALETTE_SIZE(fmt);
+        printf("[drawImage] imageFmt=%d palSize=%d\r\n", imageFormat, paletteSize);
 
         int sx0 = dx + mScreenX;
         int sy0 = dy + mScreenY;
@@ -180,6 +180,7 @@ public:
 
         // ── FMT_A8_RLE (0): grayscale + RLE ─────────────────────
         if (imageFormat == 0) {
+            printf("[drawImage] FMT_A8_RLE path\r\n");
             const uint8_t* rle = (const uint8_t*)src;
             const uint32_t* off = (const uint32_t*)rle;
             uint16_t* tile = mTile->buffer();
@@ -208,7 +209,12 @@ public:
                 } else {
                     const uint8_t* p = rle + rowOff;
                     int px = 0;
+                    int loopCnt = 0;
                     while (px < srcW) {
+                        if (++loopCnt > srcW * 2) {
+                            printf("[drawImage] A8_RLE: loop overflow y=%d px=%d srcW=%d\r\n", y, px, srcW);
+                            break;
+                        }
                         uint8_t g = *p++;
                         uint8_t len = *p++;
                         int n = (int)len + 1;
@@ -230,6 +236,7 @@ public:
 
         // ── FMT_PAL_RLE (1): palette + RLE, opaque ───────────────
         if (imageFormat == 1) {
+            printf("[drawImage] FMT_PAL_RLE path\r\n");
             const uint16_t* pal = (const uint16_t*)src;
             const uint8_t*  rle = (const uint8_t*)src + paletteSize * 2;
             const uint32_t* off = (const uint32_t*)rle;
@@ -247,7 +254,12 @@ public:
                 } else {
                     const uint8_t* p = rle + rowOff;
                     int px = 0;
+                    int loopCnt = 0;
                     while (px < srcW) {
+                        if (++loopCnt > srcW * 2) {
+                            printf("[drawImage] PAL_RLE: loop overflow y=%d px=%d srcW=%d\r\n", y, px, srcW);
+                            break;
+                        }
                         uint8_t ix = *p++; uint8_t len = *p++;
                         int n = (int)len + 1;
                         int runR = px + n, cl = px < visL ? visL : px, cr = runR > visR ? visR : runR;
@@ -265,6 +277,7 @@ public:
 
         // ── FMT_PAL_ALPHA_RLE (2): palette + RLE, alpha inline ───
         if (imageFormat == 2) {
+            printf("[drawImage] FMT_PAL_ALPHA_RLE path\r\n");
             const uint16_t* pal = (const uint16_t*)src;
             const uint8_t*  rle = (const uint8_t*)src + paletteSize * 2;
             const uint32_t* off = (const uint32_t*)rle;
@@ -275,7 +288,12 @@ public:
                 const uint8_t* p = rle + off[srcOffY + y];
                 uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
                 int px = 0;
+                int loopCnt = 0;
                 while (px < srcW) {
+                    if (++loopCnt > srcW * 2) {
+                        printf("[drawImage] PAL_ALPHA_RLE: loop overflow y=%d px=%d srcW=%d\r\n", y, px, srcW);
+                        break;
+                    }
                     uint8_t head = *p++;
                     uint8_t tt   = head >> 6;
                     int n = (head & 0x3F) + 1;  // run length 1..64

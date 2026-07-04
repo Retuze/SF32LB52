@@ -15,44 +15,54 @@
 /* ==========================================================================
  * Display
  * ========================================================================== */
-#define LCD_BL   1
-#define LCD_CS   3
-#define LCD_RST  0
-#define LCD_TE   2
-#define LCD_CLK  4
-#define LCD_D0   5
-#define LCD_D1   6
-#define LCD_D2   7
-#define LCD_D3   8
+enum {
+    LCD_BL   = 1,
+    LCD_CS   = 3,
+    LCD_RST  = 0,
+    LCD_TE   = 2,
+    LCD_CLK  = 4,
+    LCD_D0   = 5,
+    LCD_D1   = 6,
+    LCD_D2   = 7,
+    LCD_D3   = 8,
 
-#define LCD_WIDTH  390
-#define LCD_HEIGHT 450
+    LCD_WIDTH  = 390,
+    LCD_HEIGHT = 450,
+};
 
 /* ==========================================================================
  * Touch panel (I2C)
  * ========================================================================== */
-#define CTP_INT 9
-#define CTP_RST 10
-#define CTP_SDA 11
-#define CTP_SCL 20
+enum {
+    CTP_INT = 9,
+    CTP_RST = 10,
+    CTP_SDA = 11,
+    CTP_SCL = 20,
+};
 
 /* ==========================================================================
  * LEDs
  * ========================================================================== */
-#define LED_RED   31
-#define LED_GREEN 32
+enum {
+    LED_RED   = 31,
+    LED_GREEN = 32,
+};
 
 /* ==========================================================================
  * Heart-rate sensor (I2C) — populated on V1.0+
  * ========================================================================== */
-#define HRM_INT  33
-#define HRM_SDA  34
-#define HRM_SCL  35
+enum {
+    HRM_INT = 33,
+    HRM_SDA = 34,
+    HRM_SCL = 35,
+};
 
 /* ==========================================================================
  * Display backlight PWM channel
  * ========================================================================== */
-#define LCD_BL_PWM_CH  ATIM_CH1
+enum {
+    LCD_BL_PWM_CH = 1,  // ATIM channel 1
+};
 
 /* ==========================================================================
  * Board initialization functions

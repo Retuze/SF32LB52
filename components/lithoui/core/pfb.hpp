@@ -4,9 +4,7 @@
 #include "painter.hpp"
 #include <stdint.h>
 #include <stdio.h>
-#ifndef DWT_CYCCNT
-#define DWT_CYCCNT (*(volatile uint32_t*)0xE0001004UL)
-#endif
+#include "hal.h"  // dwt_cycles()
 
 namespace litho {
 
@@ -60,27 +58,32 @@ public:
     int rows()   const { return mRows; }
 
     // Per-frame stats
-    void clearStats()  { mStatDraw=0; mStatSetup=0; mStatXfer=0; mStatTiles=0; }
-    uint32_t statDraw()  const { return mStatDraw; }
-    uint32_t statSetup() const { return mStatSetup; }
-    uint32_t statXfer()  const { return mStatXfer; }
-    uint32_t statTiles() const { return mStatTiles; }
-    uint32_t tileDraw(int i) const { return (i < mStatTiles) ? mTileDraw[i] : 0; }
-    uint32_t tileXfer(int i) const { return (i < mStatTiles) ? mTileXfer[i] : 0; }
+    void clearStats()  {
+        mStatDraw=0; mStatSetup=0; mStatXfer=0; mStatTiles=0;
+        mStatWaitTE=0; mStatWaitBuff=0; mStatPoll=0;
+        for (int i = 0; i < 9; i++) {
+            mTileDraw[i] = 0;
+            mTileXfer[i] = 0;
+            mTileWaitBuff[i] = 0;
+        }
+    }
+    uint32_t statDraw()     const { return mStatDraw; }
+    uint32_t statSetup()    const { return mStatSetup; }
+    uint32_t statXfer()     const { return mStatXfer; }
+    uint32_t statTiles()    const { return mStatTiles; }
+    uint32_t statWaitTE()   const { return mStatWaitTE; }
+    uint32_t statWaitBuff() const { return mStatWaitBuff; }
+    uint32_t statPoll()     const { return mStatPoll; }
+    uint32_t tileDraw(int i)     const { return (i < (int)mStatTiles) ? mTileDraw[i] : 0; }
+    uint32_t tileXfer(int i)     const { return (i < (int)mStatTiles) ? mTileXfer[i] : 0; }
+    uint32_t tileWaitBuff(int i) const { return (i < (int)mStatTiles) ? mTileWaitBuff[i] : 0; }
 
     // Iterate the blocks covering a screen region. For each block:
-    //   1. Acquire a tile from the pool
+    //   1. Acquire a tile from the pool (waits if pool empty)
     //   2. Configure the Painter (tile, screen origin, block-sized clip)
     //   3. Call `draw(painter, bx, by, bw, bh)` — client draws the view tree
-    //   4. bitblt the tile to the display
-    //   5. Release the tile back to the pool
-    /** Set a one-shot hook called after the first tile is rendered but before
-     *  its xfer is submitted. Typically used to wait for TE (vsync) so the
-     *  first tile is pre-rendered and xfer starts immediately after TE. */
-    void setPreXferHook(void (*hook)(void*), void* ctx) {
-        mPreXferHook = hook;
-        mPreXferHookCtx = ctx;
-    }
+    //   4. bitblt the tile to the display (async, queued in pool slots)
+    //   5. Release the tile when xfer completes (via callback)
 
     template<typename Display, typename DrawFn, typename IdleFn>
     void drawRegion(const Region& region, Display& display, DrawFn&& draw,
@@ -123,13 +126,20 @@ public:
 
         auto waitForFreeTile = [&]() {
             releaseCompleted();
-            while (mFreeCount == 0) {
-                display.waitReady();
-                releaseCompleted();
+            if (mFreeCount == 0) {
+                uint32_t tw0 = dwt_cycles();
+                while (mFreeCount == 0) {
+                    display.waitReady();
+                    releaseCompleted();
+                }
+                uint32_t twait = dwt_cycles() - tw0;
+                mStatWaitBuff += twait;
+                int ti = (int)mStatTiles;
+                if (ti < 9) {
+                    mTileWaitBuff[ti] = twait;
+                }
             }
         };
-
-        bool isFirstTile = true;
 
         for (int row = r0; row < r1; row++) {
             for (int col = c0; col < c1; col++) {
@@ -140,9 +150,8 @@ public:
 
                 waitForFreeTile();
 
-                uint32_t ts0 = DWT_CYCCNT;
+                uint32_t ts0 = dwt_cycles();
                 Tile& tile = acquireTile();
-                // Clear tile (32-bit memset, replaces BgView fillRect)
                 {
                     uint32_t* p = (uint32_t*)tile.buffer();
                     uint32_t w = (uint32_t)(tile.width() * tile.height()) / 2;
@@ -151,18 +160,11 @@ public:
                 painter.setTile(tile, bx, by);
                 painter.setScreenOrigin(0, 0);
                 painter.setScreenClip(bx, by, bx + bw, by + bh);
-                uint32_t ts1 = DWT_CYCCNT;
+                uint32_t ts1 = dwt_cycles();
 
                 painter.setTileIdx((uint8_t)row);
                 draw(painter, bx, by, bw, bh);
-                uint32_t ts2 = DWT_CYCCNT;
-
-                // Pre-xfer hook: wait for TE after pre-rendering the first tile
-                if (isFirstTile && mPreXferHook) {
-                    isFirstTile = false;
-                    mPreXferHook(mPreXferHookCtx);
-                    mPreXferHook = nullptr;  // one-shot
-                }
+                uint32_t ts2 = dwt_cycles();
 
                 // Find free async slot
                 int slotIndex = -1;
@@ -181,13 +183,20 @@ public:
                 AsyncSlot& slot = slots[slotIndex];
                 slot.tile = &tile;
                 slot.done = 0;
-                slot.submitCycle = DWT_CYCCNT;
+                slot.submitCycle = dwt_cycles();
                 slot.doneCycle = slot.submitCycle;
                 slot.statIndex = ti;
+
+                if (ti == 0) {
+                    uint32_t tte0 = dwt_cycles();
+                    display.waitTE();
+                    mStatWaitTE = dwt_cycles() - tte0;
+                }
+
                 display.bitbltAsync(tile.buffer(), bx, by, bw, bh,
                     [](void* ctx) {
                         auto* s = static_cast<AsyncSlot*>(ctx);
-                        s->doneCycle = DWT_CYCCNT;
+                        s->doneCycle = dwt_cycles();
                         s->done = 1;
                     }, &slot);
 
@@ -198,10 +207,11 @@ public:
             }
         }
 
-        // Run caller-supplied work (e.g. sampling touch over slow bit-bang I2C)
-        // while the last tile's DMA is still in flight, so it overlaps the
-        // transfer instead of adding serial time to the frame. Then drain.
+        // Run caller-supplied work (e.g. polling touch) while the last tile's DMA
+        // is still in flight, overlapping it with the transfer.
+        uint32_t tpoll0 = dwt_cycles();
         onIdle();
+        mStatPoll = dwt_cycles() - tpoll0;
 
         // Drain remaining async xfers
         display.waitReady();
@@ -257,15 +267,16 @@ private:
     int*      mFreeList  = nullptr;
     int       mFreeCount = 0;
 
-    void (*mPreXferHook)(void*) = nullptr;
-    void*  mPreXferHookCtx = nullptr;
-
     uint32_t  mStatSetup = 0;
     uint32_t  mStatDraw  = 0;
     uint32_t  mStatXfer  = 0;
     uint32_t  mStatTiles = 0;
+    uint32_t  mStatWaitTE = 0;    // Cycles waiting for TE before first tile xfer
+    uint32_t  mStatWaitBuff = 0;  // Cycles waiting for buffer available (pool full)
+    uint32_t  mStatPoll = 0;      // Cycles in onIdle (touch poll + dispatch)
     uint32_t  mTileDraw[9] = {};
     uint32_t  mTileXfer[9] = {};
+    uint32_t  mTileWaitBuff[9] = {};  // Per-tile wait time before acquiring buffer
 };
 
 } // namespace litho
