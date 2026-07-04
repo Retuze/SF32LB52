@@ -7,11 +7,16 @@
   },
   "configurePresets": [
     {
+      "name": "arm-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/toolchains/clang-arm-none-eabi.cmake"
+    },
+    {
       "name": "debug",
       "displayName": "Debug (arm-none-eabi)",
-      "generator": "Ninja",
+      "inherits": "arm-base",
       "binaryDir": "${sourceDir}/build/debug",
-      "toolchainFile": "${sourceDir}/cmake/toolchains/clang-arm-none-eabi.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug"
       }
@@ -19,9 +24,8 @@
     {
       "name": "release",
       "displayName": "Release (arm-none-eabi)",
-      "generator": "Ninja",
+      "inherits": "arm-base",
       "binaryDir": "${sourceDir}/build/release",
-      "toolchainFile": "${sourceDir}/cmake/toolchains/clang-arm-none-eabi.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "MinSizeRel"
       }
@@ -42,15 +46,36 @@
   "buildPresets": [
     {
       "name": "debug",
-      "configurePreset": "debug"
+      "configurePreset": "debug",
+      "jobs": 0
     },
     {
       "name": "release",
-      "configurePreset": "release"
+      "configurePreset": "release",
+      "jobs": 0
     },
     {
       "name": "simulator",
-      "configurePreset": "simulator"
+      "configurePreset": "simulator",
+      "jobs": 0
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug (configure + build)",
+      "steps": [
+        { "type": "configure", "name": "debug" },
+        { "type": "build", "name": "debug" }
+      ]
+    },
+    {
+      "name": "release",
+      "displayName": "Release (configure + build)",
+      "steps": [
+        { "type": "configure", "name": "release" },
+        { "type": "build", "name": "release" }
+      ]
     }
   ]
 }
