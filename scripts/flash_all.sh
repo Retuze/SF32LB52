@@ -15,7 +15,7 @@ CHIP="SF32LB52"
 PORT="${1:?Usage: $0 <COM_PORT> [--debug|--release]}"
 PRESET="${2:-debug}"
 
-FTAB="${ROOT}/tools/ftab.bin"
+FTAB="${ROOT}/build/${PRESET}/ftab.bin"
 BOOTLOADER="${ROOT}/build/${PRESET}/bootloader.elf"
 FIRMWARE="${ROOT}/build/${PRESET}/firmware.elf"
 
@@ -28,7 +28,8 @@ echo "=== Flash ftab ==="
 if [ -f "$FTAB" ]; then
     "$SFTOOL" -c "$CHIP" -p "$PORT" write_flash "${FTAB}@0x12000000"
 else
-    echo "ftab not found — generate with: python tools/gen_ftab.py tools/ftab.bin"
+    echo "ftab.bin not found at $FTAB"
+    echo "Build it first: cmake --build build/${PRESET} --target ftab"
     exit 1
 fi
 

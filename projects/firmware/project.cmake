@@ -1,18 +1,17 @@
-# project.cmake — Main firmware (watch application)
+# project.cmake — Main firmware (watch application with LithoUI)
 #
 # Available libraries (registered in cmake/libraries.cmake):
 #   hal       — SoC headers, LL + HAL drivers
 #   bsp       — LCD, touch, sensor board-level drivers
 #   utility   — bit-bang, logging, ring buffer
+#   litho     — LithoUI framework
 #   picolibc  — C standard library + compiler-rt
-#
-# Uncomment as middleware is integrated:
-#   freertos, lvgl, algorithms
 
 set(PROJECT_LIBS
     hal
     bsp
     utility
+    lithoui
     picolibc
 )
 

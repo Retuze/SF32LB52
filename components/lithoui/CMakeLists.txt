@@ -1,6 +1,6 @@
 # LithoUI — lightweight embedded C++ UI framework
 
-add_library(litho STATIC
+add_library(lithoui STATIC
     # --- resource embed (assembly .incbin) ---
     generated/res_embed.S
 
@@ -18,15 +18,15 @@ add_library(litho STATIC
 set_source_files_properties(generated/res_embed.S PROPERTIES
     OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/res_images.bin")
 
-target_include_directories(litho PUBLIC
+target_include_directories(lithoui PUBLIC
     ${CMAKE_SOURCE_DIR}/components/lithoui
     ${CMAKE_SOURCE_DIR}/components/lithoui/port/sf32lb52
     ${CMAKE_SOURCE_DIR}/components/lithoui/generated
 )
 
-target_link_libraries(litho PUBLIC hal picolibc)
+target_link_libraries(lithoui PUBLIC hal picolibc)
 
-target_compile_options(litho PRIVATE
+target_compile_options(lithoui PRIVATE
     --target=arm-none-eabi
     -mcpu=cortex-m33
     -mfpu=fpv5-sp-d16
@@ -35,5 +35,5 @@ target_compile_options(litho PRIVATE
 )
 
 if(ENABLE_WARNINGS)
-    target_compile_options(litho PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_compile_options(lithoui PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()

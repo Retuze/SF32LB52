@@ -66,7 +66,7 @@ sdk_register_library(utility
 # --- LithoUI (C++17 embedded UI framework) -------------------------------
 sdk_register_library(lithoui
     "${CMAKE_SOURCE_DIR}/components/lithoui"
-    TARGETS litho
+    TARGETS lithoui
     DEPENDS hal picolibc
 )
 
