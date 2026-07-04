@@ -99,7 +99,6 @@ _Static_assert(LCD_D1 == LCD_D0 + 1 && LCD_D2 == LCD_D0 + 2 &&
                LCD_D3 == LCD_D0 + 3 && LCD_D0 >= 4,
                "push needs consecutive D0..D3 with D0>=4");
 
-__attribute__((weak))
 void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                 const uint16_t *rgb565,
                 void (*done)(void *ctx), void *ctx)
@@ -118,6 +117,7 @@ void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
     const uint32_t clr = dm | ck;
 
     qspi_begin();
+    // 0x12 = quad-cmd + quad-data (consistent with LCDC driver)
     qspi_write_byte(0x12); qspi_write_byte4(0x00);
     qspi_write_byte4(0x2C); qspi_write_byte4(0x00);
 

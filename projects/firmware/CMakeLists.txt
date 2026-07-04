@@ -10,7 +10,6 @@ add_executable(firmware
     startup.c
     system.c
     ${PLATFORM_DIR}/board.c
-    ${CMAKE_SOURCE_DIR}/components/bsp/lcd/bus/lcd_bus_qspi_lcdc.c  # strong overrides
 )
 
 target_include_directories(firmware PRIVATE

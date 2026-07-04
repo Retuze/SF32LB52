@@ -9,13 +9,20 @@
 /* ── Board-level LCD initialization ──────────────────────────────────────── */
 
 /* Forward declarations from bsp drivers */
+#if defined(LCD_BUS_GPIO)
 extern const lcd_bus_t lcd_bus_qspi_gpio;
-extern const lcd_bus_t lcd_bus_qspi_lcdc;   /* Hardware LCDC */
+#elif defined(LCD_BUS_LCDC)
+extern const lcd_bus_t lcd_bus_qspi_lcdc;
+#endif
 extern const lcd_ic_t  lcd_ic_co5300;
 
 void board_lcd_init(void)
 {
-    lcd_set_bus(&lcd_bus_qspi_lcdc);      /* Hardware LCDC (fast DMA) */
+#if defined(LCD_BUS_GPIO)
+    lcd_set_bus(&lcd_bus_qspi_gpio);
+#elif defined(LCD_BUS_LCDC)
+    lcd_set_bus(&lcd_bus_qspi_lcdc);
+#endif
     lcd_set_ic(&lcd_ic_co5300);
     lcd_set_ctrl_pins(LCD_RST, LCD_BL);
     lcd_init();
