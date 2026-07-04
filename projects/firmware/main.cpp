@@ -115,11 +115,7 @@ extern "C" int main()
 
     SF32Input input;  /* touch init before LCDC — avoids pinmux conflict */
 
-    lcd_set_bus(&lcd_bus_default);
-    lcd_set_ic(&lcd_ic_default);
-    lcd_set_geometry(LCD_WIDTH, LCD_HEIGHT);
-    lcd_set_pins(LCD_RST, LCD_BL);
-    lcd_init();
+    board_lcd_init();
 
     SF32Display display;
     display.init(kScreenW, kScreenH);

@@ -94,7 +94,7 @@ static uint32_t co5300_read_id(const lcd_bus_t *b)
     return ((uint32_t)id[0] << 16) | ((uint32_t)id[1] << 8) | id[2];
 }
 
-const lcd_ic_t lcd_ic_default = {
+const lcd_ic_t lcd_ic_co5300 = {
     .name       = "CO5300",
     .init       = co5300_init,
     .set_window = co5300_set_window,

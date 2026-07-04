@@ -26,8 +26,8 @@ static struct {
 
 void lcd_set_bus(const lcd_bus_t *b)      { g.bus = b; }
 void lcd_set_ic(const lcd_ic_t *i)        { g.ic  = i; }
-void lcd_set_pins(uint32_t rst, uint32_t bl) { g.pin_rst = rst; g.pin_bl = bl; }
-void lcd_set_geometry(uint16_t w, uint16_t h) { g.width = w; g.height = h; }
+void lcd_set_ctrl_pins(uint32_t rst, uint32_t bl) { g.pin_rst = rst; g.pin_bl = bl; }
+void lcd_set_resolution(uint16_t w, uint16_t h) { g.width = w; g.height = h; }
 
 /* ── Init ─────────────────────────────────────────────────────────────── */
 

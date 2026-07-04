@@ -55,8 +55,8 @@ typedef struct lcd_ic {
 
 void lcd_set_bus(const lcd_bus_t *bus);
 void lcd_set_ic(const lcd_ic_t *ic);
-void lcd_set_pins(uint32_t rst, uint32_t bl);
-void lcd_set_geometry(uint16_t w, uint16_t h);
+void lcd_set_ctrl_pins(uint32_t rst, uint32_t bl);
+void lcd_set_resolution(uint16_t w, uint16_t h);
 
 /* ── Public API ──────────────────────────────────────────────────────── */
 
@@ -85,10 +85,14 @@ void lcd_te_init(void);
 void lcd_te_wait(void);
 int  lcd_te_late_count(void);  /* TE fired while xfer was busy → tearing */
 
-/* ── Default instances (defined by bus / IC drivers) ──────────────────── */
+/* ── Available bus drivers ──────────────────────────────────────────────── */
 
-extern const lcd_bus_t lcd_bus_default;
-extern const lcd_ic_t  lcd_ic_default;
+extern const lcd_bus_t lcd_bus_qspi_gpio;   /* GPIO bit-bang QSPI */
+extern const lcd_bus_t lcd_bus_qspi_lcdc;   /* Hardware LCDC QSPI (used by async path) */
+
+/* ── Available IC drivers ───────────────────────────────────────────────── */
+
+extern const lcd_ic_t lcd_ic_co5300;        /* CO5300 390×450 AMOLED */
 
 #ifdef __cplusplus
 }

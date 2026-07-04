@@ -85,7 +85,7 @@ static void qspi_cmd_read(uint8_t cmd, uint8_t *data, uint32_t data_len)
 
 /* ── Bus vtable ───────────────────────────────────────────────────────── */
 
-const lcd_bus_t lcd_bus_default = {
+const lcd_bus_t lcd_bus_qspi_gpio = {
     .init      = qspi_init,
     .begin     = qspi_begin,
     .end       = qspi_end,

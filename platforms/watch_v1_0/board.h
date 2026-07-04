@@ -54,4 +54,16 @@
  * ========================================================================== */
 #define LCD_BL_PWM_CH  ATIM_CH1
 
+/* ==========================================================================
+ * Board initialization functions
+ * ========================================================================== */
+
+/**
+ * @brief Initialize LCD (bus + IC + geometry + pins).
+ *
+ * Configures and initializes the LCD subsystem for this board variant.
+ * Encapsulates lcd_set_bus/ic/geometry/pins/init sequence.
+ */
+void board_lcd_init(void);
+
 #endif /* _BOARD_H_ */
