@@ -19,15 +19,12 @@ extern void lcd_fill(uint16_t color, uint32_t n);
 static struct {
     const lcd_bus_t *bus;
     const lcd_ic_t  *ic;
-    uint16_t width, height;
     uint32_t pin_rst, pin_bl;
-} g = { .width = 390, .height = 450,
-        .pin_rst = 0xFFFFFFFF, .pin_bl = 0xFFFFFFFF };
+} g = { .pin_rst = 0xFFFFFFFF, .pin_bl = 0xFFFFFFFF };
 
 void lcd_set_bus(const lcd_bus_t *b)      { g.bus = b; }
 void lcd_set_ic(const lcd_ic_t *i)        { g.ic  = i; }
 void lcd_set_ctrl_pins(uint32_t rst, uint32_t bl) { g.pin_rst = rst; g.pin_bl = bl; }
-void lcd_set_resolution(uint16_t w, uint16_t h) { g.width = w; g.height = h; }
 
 /* ── Init ─────────────────────────────────────────────────────────────── */
 
@@ -72,8 +69,8 @@ void lcd_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1)
 void lcd_fill_rect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t color)
 {
     if (x0 > x1 || y0 > y1) return;
-    if (x1 >= g.width)  x1 = g.width - 1U;
-    if (y1 >= g.height) y1 = g.height - 1U;
+    if (x1 >= LCD_WIDTH)  x1 = LCD_WIDTH - 1U;
+    if (y1 >= LCD_HEIGHT) y1 = LCD_HEIGHT - 1U;
 
     lcd_set_window(x0, y0, x1, y1);
     lcd_fill(color, (uint32_t)(x1 - x0 + 1U) * (uint32_t)(y1 - y0 + 1U));
@@ -81,12 +78,12 @@ void lcd_fill_rect(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1, uint16_t 
 
 void lcd_fill_color(uint16_t color)
 {
-    lcd_fill_rect(0, 0, g.width - 1U, g.height - 1U, color);
+    lcd_fill_rect(0, 0, LCD_WIDTH - 1U, LCD_HEIGHT - 1U, color);
 }
 
 void lcd_draw_pixel(uint16_t x, uint16_t y, uint16_t color)
 {
-    if (x >= g.width || y >= g.height) return;
+    if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
     lcd_set_window(x, y, x, y);
     lcd_fill(color, 1);
 }
@@ -94,9 +91,9 @@ void lcd_draw_pixel(uint16_t x, uint16_t y, uint16_t color)
 void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h, const uint16_t *rgb565)
 {
     if (!rgb565 || !w || !h) return;
-    if (x >= g.width || y >= g.height) return;
-    if ((uint32_t)x + w > g.width)  w = g.width - x;
-    if ((uint32_t)y + h > g.height) h = g.height - y;
+    if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
+    if ((uint32_t)x + w > LCD_WIDTH)  w = LCD_WIDTH - x;
+    if ((uint32_t)y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
 
     lcd_set_window(x, y, (uint16_t)(x + w - 1U), (uint16_t)(y + h - 1U));
     lcd_send(rgb565, (uint32_t)w * (uint32_t)h);

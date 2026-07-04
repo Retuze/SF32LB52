@@ -56,7 +56,6 @@ typedef struct lcd_ic {
 void lcd_set_bus(const lcd_bus_t *bus);
 void lcd_set_ic(const lcd_ic_t *ic);
 void lcd_set_ctrl_pins(uint32_t rst, uint32_t bl);
-void lcd_set_resolution(uint16_t w, uint16_t h);
 
 /* ── Public API ──────────────────────────────────────────────────────── */
 

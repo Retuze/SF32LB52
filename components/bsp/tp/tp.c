@@ -14,11 +14,9 @@ static struct {
     const tp_bus_t *bus;
     const tp_ic_t  *ic;
     const void     *bus_config;  /* e.g., bb_i2c_t* for I2C bus */
-    uint16_t width, height;
     uint32_t pin_rst, pin_irq;
     uint8_t  dev_addr;
 } g = {
-    .width = 390, .height = 450,
     .pin_rst = 0xFFFFFFFF, .pin_irq = 0xFFFFFFFF
 };
 
@@ -59,7 +57,6 @@ void tp_set_bus(const tp_bus_t *b, const void *cfg) {
 }
 void tp_set_ic(const tp_ic_t *i)                     { g.ic = i; g.dev_addr = i->dev_addr; }
 void tp_set_ctrl_pins(uint32_t rst, uint32_t irq)   { g.pin_rst = rst; g.pin_irq = irq; }
-void tp_set_resolution(uint16_t w, uint16_t h)      { g.width = w; g.height = h; }
 
 /* ── Init ─────────────────────────────────────────────────────────────── */
 

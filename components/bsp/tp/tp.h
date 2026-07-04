@@ -63,7 +63,6 @@ enum {
 void tp_set_bus(const tp_bus_t *bus, const void *bus_config);
 void tp_set_ic(const tp_ic_t *ic);
 void tp_set_ctrl_pins(uint32_t rst, uint32_t irq);
-void tp_set_resolution(uint16_t w, uint16_t h);
 
 /* ── Public API ──────────────────────────────────────────────────────── */
 

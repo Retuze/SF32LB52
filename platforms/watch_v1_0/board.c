@@ -17,7 +17,6 @@ void board_lcd_init(void)
 {
     lcd_set_bus(&lcd_bus_qspi_gpio);
     lcd_set_ic(&lcd_ic_co5300);
-    lcd_set_resolution(LCD_WIDTH, LCD_HEIGHT);
     lcd_set_ctrl_pins(LCD_RST, LCD_BL);
     lcd_init();
 }
@@ -47,7 +46,6 @@ void board_tp_init(void)
 {
     tp_set_bus(&tp_bus_i2c, &tp_i2c_config);
     tp_set_ic(&tp_ic_ft6146);
-    tp_set_resolution(LCD_WIDTH, LCD_HEIGHT);
     tp_set_ctrl_pins(CTP_RST, CTP_INT);
     tp_init();
 }
