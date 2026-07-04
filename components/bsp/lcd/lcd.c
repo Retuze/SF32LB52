@@ -65,33 +65,7 @@ void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
                 const uint16_t *rgb565,
                 void (*done)(void *ctx), void *ctx)
 {
-    if (!rgb565 || !w || !h) {
-        if (done) done(ctx);
-        return;
-    }
-    if (x >= LCD_WIDTH || y >= LCD_HEIGHT) {
-        if (done) done(ctx);
-        return;
-    }
-    if ((uint32_t)x + w > LCD_WIDTH)  w = LCD_WIDTH - x;
-    if ((uint32_t)y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
-
-    lcd_set_window(x, y, (uint16_t)(x + w - 1U), (uint16_t)(y + h - 1U));
-
-    // Send RAMWR command (0x2C) and pixel data via bus (1-wire SPI)
-    g.bus->begin();
-    uint8_t cmd = 0x2C;
-    g.bus->send(0x02, &cmd, 1);  // 1-wire command
-
-    // Send pixels byte-by-byte (1-wire data, very slow but compatible)
-    const uint8_t *p = (const uint8_t *)rgb565;
-    uint32_t n = (uint32_t)w * (uint32_t)h * 2;  // 2 bytes per pixel
-    for (uint32_t i = 0; i < n; i++) {
-        g.bus->send(0x02, &p[i], 1);  // 1-wire data
-    }
-    g.bus->end();
-
-    if (done) done(ctx);
+    // 需要在lcd_bus中实现该接口
 }
 
 /* ── Async support helpers (weak defaults — overridden by LCDC bus driver) ─── */
