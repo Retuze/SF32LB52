@@ -62,8 +62,16 @@
  * @brief Initialize LCD (bus + IC + geometry + pins).
  *
  * Configures and initializes the LCD subsystem for this board variant.
- * Encapsulates lcd_set_bus/ic/geometry/pins/init sequence.
+ * Encapsulates lcd_set_bus/ic/resolution/ctrl_pins/init sequence.
  */
 void board_lcd_init(void);
+
+/**
+ * @brief Initialize touch panel (bus + IC + geometry + pins).
+ *
+ * Configures and initializes the TP subsystem for this board variant.
+ * Encapsulates tp_set_bus/ic/resolution/ctrl_pins/init sequence.
+ */
+void board_tp_init(void);
 
 #endif /* _BOARD_H_ */
