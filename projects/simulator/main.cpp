@@ -61,11 +61,14 @@ public:
         static constexpr int kGapY  = 15;
         static constexpr int kStartY = 40;
 
+        // Row 1: alpha (transparent, FMT_PAL_ALPHA_RLE)
+        // Row 2-3: opaque (FMT_PAL_RLE)
+        // Row 4: alpha
         ImageId icons[] = {
-            IMG_DIAL,     IMG_MESSAGES, IMG_MUSIC,
-            IMG_SETTINGS, IMG_CAMERA,   IMG_WEATHER,
-            IMG_CALENDAR, IMG_COMPASS,  IMG_SPORTS,
-            IMG_SLEEP,    IMG_ALARM,    IMG_STOPWATCH,
+            IMG_A_DIAL,     IMG_A_MESSAGES, IMG_A_MUSIC,
+            IMG_SETTINGS,   IMG_CAMERA,     IMG_WEATHER,
+            IMG_CALENDAR,   IMG_COMPASS,    IMG_SPORTS,
+            IMG_A_CAMERA,   IMG_A_CALENDAR, IMG_A_COMPASS,
         };
 
         for (int i = 0; i < (int)(sizeof(icons) / sizeof(icons[0])); i++) {
