@@ -16,6 +16,10 @@ if(SIMULATOR)
         ${CMAKE_SOURCE_DIR}/components/lithoui
         ${CMAKE_SOURCE_DIR}/components/lithoui/generated
     )
+    # Stub hal.h intercepts `#include "hal.h"` from painter.hpp/pfb.hpp
+    target_include_directories(litho SYSTEM PRIVATE
+        ${CMAKE_SOURCE_DIR}/projects/simulator/hal_stub
+    )
 
 else()
     # ── ARM firmware build ─────────────────────────────────────────

@@ -82,17 +82,40 @@ uint32_t millis(void)
 void SysTick_Handler(void) {}
 
 /* ===================================================================
+ *  DWT cycle counter stub — called by hal_stub/hal.h inline wrapper
+ * =================================================================== */
+
+unsigned _sim_dwt_cycles(void)
+{
+#if defined(__clang__) || defined(__GNUC__)
+    unsigned lo;
+    __asm__ volatile("rdtsc" : "=a"(lo) : : "edx", "memory");
+    return lo;
+#elif defined(_MSC_VER)
+    return (unsigned)__rdtsc();
+#else
+    return 0;
+#endif
+}
+
+/* ===================================================================
  *  LCD stubs
  * =================================================================== */
 
 void lcd_init(void *dev)                        { (void)dev; }
 void lcd_set_brightness(void *dev, uint8_t pct) { (void)dev; (void)pct; }
 
-// Called from window_manager.hpp extern declaration.
-// Simulator doesn't need this (PFB tile memset handles background),
-// but we provide a no-op to satisfy the linker.
+// lcd_ref_fill_buf — called from window_manager.hpp extern declaration.
+// Simulator doesn't need this (PFB tile memset handles background).
 void lcd_ref_fill_buf(uint16_t* buf, int stride,
                       int w, int h, uint16_t color)
 {
     (void)buf; (void)stride; (void)w; (void)h; (void)color;
+}
+
+// lcd_te_late_count — called from window_manager.hpp extern declaration.
+// Returns count of late TE (tearing effect) signals. Always 0 on simulator.
+int lcd_te_late_count(void)
+{
+    return 0;
 }
