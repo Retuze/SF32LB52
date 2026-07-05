@@ -52,12 +52,15 @@ private:
     // ── Window / GDI state ─────────────────────────────────────
     HWND       mHwnd      = nullptr;
     HDC        mHdc       = nullptr;   // window DC
-    HDC        mMemDc     = nullptr;   // memory DC (double-buffer)
-    HBITMAP    mDib       = nullptr;   // DIB section
+    HDC        mMemDc     = nullptr;   // memory DC (DIB section)
+    HBITMAP    mDib       = nullptr;   // DIB section (390x450)
     HBITMAP    mOldBmp    = nullptr;   // saved original bitmap
-    uint32_t*  mBackbuf   = nullptr;   // pointer into DIB pixels
-    int        mWidth     = 0;
-    int        mHeight    = 0;
+    uint32_t*  mBackbuf   = nullptr;   // pointer into DIB pixels (390x450)
+    int        mWidth     = 0;         // framebuffer size (always 390)
+    int        mHeight    = 0;         // framebuffer size (always 450)
+    int        mScale     = 1;         // DPI scale factor (1=96dpi, 2=192dpi)
+    int        mWinW      = 0;         // window client width (mWidth * mScale)
+    int        mWinH      = 0;         // window client height (mHeight * mScale)
     bool       mButtonDown = false;
 };
 

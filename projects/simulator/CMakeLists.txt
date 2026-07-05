@@ -12,7 +12,7 @@ endif()
 
 if(WIN32)
     set(SIM_DISPLAY_SRC host_display_gdi.cpp)
-    set(SIM_LIBS gdi32 user32)
+    set(SIM_LIBS gdi32 user32 shcore)
 else()
     find_package(X11 REQUIRED)
     set(SIM_DISPLAY_SRC host_display_x11.cpp)

@@ -14,8 +14,41 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>   // atoi
+#include <shellscalingapi.h>  // SetProcessDPIAware, GetDpiForMonitor
 
 namespace litho {
+
+// ═══════════════════════════════════════════════════════════════════
+//  DPI awareness — prevent Windows from bitmap-stretching our window
+// ═══════════════════════════════════════════════════════════════════
+
+namespace {
+
+int get_dpi_scale(HWND hwnd)
+{
+    // Try per-monitor DPI (Windows 8.1+)
+    HMONITOR hm = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    if (hm) {
+        UINT dpiX = 0, dpiY = 0;
+        HRESULT hr = GetDpiForMonitor(hm, MDT_EFFECTIVE_DPI, &dpiX, &dpiY);
+        if (SUCCEEDED(hr) && dpiX > 0) {
+            // Round to nearest integer scale: 96→1, 120→1, 144→2, 192→2, 288→3
+            int scale = (dpiX + 48) / 96;
+            if (scale < 1) scale = 1;
+            return scale;
+        }
+    }
+    // Fallback: system DPI
+    HDC screen = GetDC(nullptr);
+    int dpi = GetDeviceCaps(screen, LOGPIXELSX);
+    ReleaseDC(nullptr, screen);
+    int scale = (dpi + 48) / 96;
+    if (scale < 1) scale = 1;
+    return scale;
+}
+
+} // anonymous namespace
 
 // GET_X_LPARAM / GET_Y_LPARAM are in <windowsx.h>
 #include <windowsx.h>
@@ -103,8 +136,8 @@ LRESULT GdiDisplay::wndProc(UINT msg, WPARAM wp, LPARAM lp)
         mButtonDown = true;
         ev.type = EventType::TOUCH;
         ev.touch.action = TouchAction::DOWN;
-        ev.touch.x = GET_X_LPARAM(lp);
-        ev.touch.y = GET_Y_LPARAM(lp);
+        ev.touch.x = GET_X_LPARAM(lp) / mScale;
+        ev.touch.y = GET_Y_LPARAM(lp) / mScale;
         pushEvent(ev);
         return 0;
 
@@ -112,8 +145,8 @@ LRESULT GdiDisplay::wndProc(UINT msg, WPARAM wp, LPARAM lp)
         mButtonDown = false;
         ev.type = EventType::TOUCH;
         ev.touch.action = TouchAction::UP;
-        ev.touch.x = GET_X_LPARAM(lp);
-        ev.touch.y = GET_Y_LPARAM(lp);
+        ev.touch.x = GET_X_LPARAM(lp) / mScale;
+        ev.touch.y = GET_Y_LPARAM(lp) / mScale;
         pushEvent(ev);
         return 0;
 
@@ -121,8 +154,8 @@ LRESULT GdiDisplay::wndProc(UINT msg, WPARAM wp, LPARAM lp)
         if (mButtonDown) {
             ev.type = EventType::TOUCH;
             ev.touch.action = TouchAction::MOVE;
-            ev.touch.x = GET_X_LPARAM(lp);
-            ev.touch.y = GET_Y_LPARAM(lp);
+            ev.touch.x = GET_X_LPARAM(lp) / mScale;
+            ev.touch.y = GET_Y_LPARAM(lp) / mScale;
             pushEvent(ev);
         }
         return 0;
@@ -155,14 +188,19 @@ LRESULT GdiDisplay::wndProc(UINT msg, WPARAM wp, LPARAM lp)
         return 1;
 
     case WM_PAINT: {
-        // Validate the dirty rect and repaint from our DIB
         PAINTSTRUCT ps;
         HDC paintDc = BeginPaint(mHwnd, &ps);
         if (mMemDc) {
-            BitBlt(paintDc, ps.rcPaint.left, ps.rcPaint.top,
-                   ps.rcPaint.right - ps.rcPaint.left,
-                   ps.rcPaint.bottom - ps.rcPaint.top,
-                   mMemDc, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
+            if (mScale == 1) {
+                BitBlt(paintDc, ps.rcPaint.left, ps.rcPaint.top,
+                       ps.rcPaint.right - ps.rcPaint.left,
+                       ps.rcPaint.bottom - ps.rcPaint.top,
+                       mMemDc, ps.rcPaint.left, ps.rcPaint.top, SRCCOPY);
+            } else {
+                SetStretchBltMode(paintDc, COLORONCOLOR);
+                StretchBlt(paintDc, 0, 0, mWinW, mWinH,
+                           mMemDc, 0, 0, mWidth, mHeight, SRCCOPY);
+            }
         }
         EndPaint(mHwnd, &ps);
         return 0;
@@ -204,6 +242,18 @@ bool GdiDisplay::init(int w, int h)
     mWidth  = w;
     mHeight = h;
 
+    // ── DPI awareness (prevent system bitmap scaling) ────────────
+    // Declare this process as DPI-aware so Windows doesn't
+    // stretch our window content. We do our own integer scaling.
+    SetProcessDPIAware();
+
+    // Check env var LITHO_SCALE for manual override
+    const char* envScale = getenv("LITHO_SCALE");
+    if (envScale) {
+        mScale = atoi(envScale);
+        if (mScale < 1) mScale = 1;
+    }
+
     // ── Register window class ──────────────────────────────────
     HINSTANCE hInst = GetModuleHandle(nullptr);
 
@@ -222,8 +272,24 @@ bool GdiDisplay::init(int w, int h)
         return false;
     }
 
+    // ── Create a temporary window to detect DPI scale ────────────
+    // We create a hidden window first, get the monitor DPI, then
+    // recreate the window at the correct size.
+    HWND tmpHwnd = CreateWindowEx(
+        0, TEXT("LithoSimWnd"), TEXT(""), WS_POPUP,
+        0, 0, 1, 1, nullptr, nullptr, hInst, this);
+
+    if (!mScale) {  // auto-detect if not overridden by env var
+        mScale = get_dpi_scale(tmpHwnd);
+    }
+    DestroyWindow(tmpHwnd);
+
+    // Scaled window client area
+    mWinW = mWidth  * mScale;
+    mWinH = mHeight * mScale;
+
     // ── Adjust window size for client area ──────────────────────
-    RECT rect = {0, 0, (LONG)w, (LONG)h};
+    RECT rect = {0, 0, (LONG)mWinW, (LONG)mWinH};
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     AdjustWindowRect(&rect, style, FALSE);
 
@@ -241,14 +307,15 @@ bool GdiDisplay::init(int w, int h)
         return false;
     }
 
-    // ── Create DIB section for the backing buffer ───────────────
+    // ── Create DIB section at native resolution (390×450) ──────
+    // We render at native res, then integer-scale via StretchBlt.
     mHdc = GetDC(mHwnd);
     mMemDc = CreateCompatibleDC(mHdc);
 
     BITMAPINFO bmi = {};
     bmi.bmiHeader.biSize     = sizeof(bmi.bmiHeader);
-    bmi.bmiHeader.biWidth    = w;
-    bmi.bmiHeader.biHeight   = -h;  // top-down DIB (negative height)
+    bmi.bmiHeader.biWidth    = mWidth;
+    bmi.bmiHeader.biHeight   = -mHeight;  // top-down DIB
     bmi.bmiHeader.biPlanes   = 1;
     bmi.bmiHeader.biBitCount = 32;
     bmi.bmiHeader.biCompression = BI_RGB;
@@ -263,13 +330,14 @@ bool GdiDisplay::init(int w, int h)
     mOldBmp = (HBITMAP)SelectObject(mMemDc, mDib);
 
     // Fill with black
-    memset(mBackbuf, 0, (size_t)w * h * 4);
+    memset(mBackbuf, 0, (size_t)mWidth * mHeight * 4);
 
     // ── Show the window ─────────────────────────────────────────
     ShowWindow(mHwnd, SW_SHOW);
     UpdateWindow(mHwnd);
 
-    printf("[sim] GDI window %dx%d created\n", w, h);
+    printf("[sim] GDI window %dx%d (framebuffer %dx%d, scale %dx)\n",
+           mWinW, mWinH, mWidth, mHeight, mScale);
     return true;
 }
 
@@ -296,7 +364,16 @@ void GdiDisplay::bitblt(const uint16_t* data, int x, int y, int w, int h)
 void GdiDisplay::flush()
 {
     if (!mMemDc || !mHdc) return;
-    BitBlt(mHdc, 0, 0, mWidth, mHeight, mMemDc, 0, 0, SRCCOPY);
+    // Integer-scale the 390×450 DIB to the window client area.
+    // Use nearest-neighbour (COLORONCOLOR / no smoothing) for
+    // crisp pixel art — important for watch UI debugging.
+    if (mScale == 1) {
+        BitBlt(mHdc, 0, 0, mWidth, mHeight, mMemDc, 0, 0, SRCCOPY);
+    } else {
+        SetStretchBltMode(mHdc, COLORONCOLOR);
+        StretchBlt(mHdc, 0, 0, mWinW, mWinH,
+                   mMemDc, 0, 0, mWidth, mHeight, SRCCOPY);
+    }
 }
 
 } // namespace litho
