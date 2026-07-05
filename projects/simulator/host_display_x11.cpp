@@ -22,7 +22,7 @@ namespace litho {
 //  RGB565 → XRGB8888
 // ═══════════════════════════════════════════════════════════════════
 
-static inline uint32_t rgb565_to_xrgb(uint16_t c)
+static inline uint32_t rgb565_to_argb(uint16_t c)
 {
     // Extract 5/6/5 bits
     uint32_t r5 = (c >> 11) & 0x1F;
@@ -32,8 +32,9 @@ static inline uint32_t rgb565_to_xrgb(uint16_t c)
     uint32_t r8 = (r5 << 3) | (r5 >> 2);   // 5→8
     uint32_t g8 = (g6 << 2) | (g6 >> 4);   // 6→8
     uint32_t b8 = (b5 << 3) | (b5 >> 2);   // 5→8
-    // Pack XRGB8888
-    return (r8 << 16) | (g8 << 8) | b8;
+    // X11 XImage with 32-bit depth on x86 = BGRA byte order (same as GDI).
+    // Alpha 0xFF prevents black pixels appearing as transparent.
+    return 0xFF000000u | (b8 << 16) | (g8 << 8) | r8;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -259,7 +260,7 @@ void X11Display::bitblt(const uint16_t* data, int x, int y, int w, int h)
         uint32_t*       dst = mBackbuf + (y + row) * mWidth + x;
         const uint16_t* src = data + row * w;
         for (int col = 0; col < w; col++) {
-            dst[col] = rgb565_to_xrgb(src[col]);
+            dst[col] = rgb565_to_argb(src[col]);
         }
     }
 }
