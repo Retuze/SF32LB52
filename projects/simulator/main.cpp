@@ -67,34 +67,14 @@ public:
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
 
-        // Red background → any "holes" in alpha icons will show red
-        root->addView(new ColorBg(RGB565::fromRGB(255, 0, 0)));
-
-        static constexpr int kCols  = 3;
-        static constexpr int kIconW = 100;
-        static constexpr int kIconH = 100;
-        static constexpr int kGapX  = (kScreenW - kCols * kIconW) / (kCols + 1);
-        static constexpr int kGapY  = 15;
-        static constexpr int kStartY = 40;
-
-        // Row 1: alpha (transparent, FMT_PAL_ALPHA_RLE)
-        // Row 2-3: opaque (FMT_PAL_RLE)
-        // Row 4: alpha
-        ImageId icons[] = {
-            IMG_A_DIAL,     IMG_A_MESSAGES, IMG_A_MUSIC,
-            IMG_SETTINGS,   IMG_CAMERA,     IMG_WEATHER,
-            IMG_CALENDAR,   IMG_COMPASS,    IMG_SPORTS,
-            IMG_A_CAMERA,   IMG_A_CALENDAR, IMG_A_COMPASS,
+        // Single centered alpha icon — isolate rendering issue
+        auto* iv = new ImageView(IMG_A_ALARM);
+        iv->bounds() = {
+            (int16_t)((kScreenW - 100) / 2),
+            (int16_t)((kScreenH - 100) / 2),
+            100, 100
         };
-
-        for (int i = 0; i < (int)(sizeof(icons) / sizeof(icons[0])); i++) {
-            int cx = kGapX + (i % kCols) * (kIconW + kGapX);
-            int cy = kStartY + (i / kCols) * (kIconH + kGapY);
-            auto* iv = new ImageView(icons[i]);
-            iv->bounds().x = (int16_t)cx;
-            iv->bounds().y = (int16_t)cy;
-            root->addView(iv);
-        }
+        root->addView(iv);
     }
 
     void onResume() override {
