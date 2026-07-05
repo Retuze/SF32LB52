@@ -47,12 +47,28 @@ using namespace litho;
 static constexpr int kScreenW = 390;
 static constexpr int kScreenH = 450;
 
+// Simple solid-color background view — makes transparency artifacts obvious
+class ColorBg : public View {
+public:
+    explicit ColorBg(RGB565 c) : mColor(c) {
+        mBounds = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+    }
+    void onDraw(Painter& p) override {
+        p.fillRect(0, 0, mBounds.width, mBounds.height, mColor);
+    }
+private:
+    RGB565 mColor;
+};
+
 class GalleryActivity : public Activity {
 public:
     void onCreate(Bundle&) override {
         auto* root = new ViewGroup();
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
+
+        // Red background → any "holes" in alpha icons will show red
+        root->addView(new ColorBg(RGB565::fromRGB(255, 0, 0)));
 
         static constexpr int kCols  = 3;
         static constexpr int kIconW = 100;
