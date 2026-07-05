@@ -39,6 +39,12 @@ foreach(_proj ${_project_dirs})
         continue()
     endif()
 
+    # When SIMULATOR=ON, only build the simulator project;
+    # skip ARM firmware projects (they use a different toolchain).
+    if(SIMULATOR AND NOT _proj STREQUAL "simulator")
+        continue()
+    endif()
+
     if(EXISTS "${_proj_config}")
         set(PROJECT_LIBS "")
         include(${_proj_config})

@@ -95,7 +95,9 @@ extern const uint8_t _binary_res_images_bin_end[];
 }
 #endif
 
+#ifndef RES_IMAGE_BUNDLE
 #define RES_IMAGE_BUNDLE  _binary_res_images_bin_start
+#endif
 
 #ifdef __cplusplus
 static inline const ImageBundleHeader* resHeader() {

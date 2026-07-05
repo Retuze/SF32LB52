@@ -53,22 +53,30 @@ sdk_register_library(hal
 sdk_register_library(bsp
     "${CMAKE_SOURCE_DIR}/components/bsp"
     TARGETS bsp
-    DEPENDS hal picolibc
+    DEPENDS hal
 )
 
 # --- Utilities (log, ring buffer, bit-bang, CRC, etc.) -----------------
 sdk_register_library(utility
-    "${CMAKE_SOURCE_DIR}/components/utility"
+    "${CMAKE_SOURCE_DIR}/components/utils"
     TARGETS utility
     DEPENDS hal
 )
 
 # --- LithoUI (C++17 embedded UI framework) -------------------------------
-sdk_register_library(lithoui
-    "${CMAKE_SOURCE_DIR}/components/lithoui"
-    TARGETS lithoui
-    DEPENDS hal picolibc
-)
+if(SIMULATOR)
+    sdk_register_library(lithoui
+        "${CMAKE_SOURCE_DIR}/components/lithoui"
+        TARGETS litho
+        # Host build: no embedded dependencies
+    )
+else()
+    sdk_register_library(lithoui
+        "${CMAKE_SOURCE_DIR}/components/lithoui"
+        TARGETS litho
+        DEPENDS hal picolibc
+    )
+endif()
 
 # --- C library (picolibc + compiler-rt) --------------------------------
 sdk_register_library(picolibc
