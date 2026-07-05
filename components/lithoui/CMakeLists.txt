@@ -49,6 +49,9 @@ else()
     )
 endif()
 
+# Alias so projects can link as either `litho` or `lithoui`
+add_library(lithoui ALIAS litho)
+
 if(ENABLE_WARNINGS)
     target_compile_options(litho PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()

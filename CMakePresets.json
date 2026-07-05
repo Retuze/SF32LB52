@@ -66,24 +66,6 @@
       "displayName": "Debug (configure + build)",
       "steps": [
         { "type": "configure", "name": "debug" },
-        { "type": "build", "name": "debug" }
-      ]
-    },
-    {
-      "name": "release",
-      "displayName": "Release (configure + build)",
-      "steps": [
-        { "type": "configure", "name": "release" },
-        { "type": "build", "name": "release" }
-      ]
-    }
-  ],
-  "workflowPresets": [
-    {
-      "name": "debug",
-      "displayName": "Debug (configure + build)",
-      "steps": [
-        { "type": "configure", "name": "debug" },
         { "type": "build",     "name": "debug" }
       ]
     },

@@ -58,7 +58,7 @@ sdk_register_library(bsp
 
 # --- Utilities (log, ring buffer, bit-bang, CRC, etc.) -----------------
 sdk_register_library(utility
-    "${CMAKE_SOURCE_DIR}/components/utils"
+    "${CMAKE_SOURCE_DIR}/components/utility"
     TARGETS utility
     DEPENDS hal
 )

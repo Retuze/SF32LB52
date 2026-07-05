@@ -55,9 +55,9 @@ typedef enum ImageId {
 enum ImageFormat {
     FMT_A8_RLE          = 0,  // grayscale RLE, tint coloring, opaque
     FMT_PAL_RLE         = 1,  // palette RLE, RGB565 palette, opaque
-    FMT_PAL_ALPHA_RLE   = 2,  // palette RLE, RGB565 palette, alpha inline
+    FMT_PAL_ALPHA_RLE   = 2,  // palette RLE, RGB565 palette, alpha inline (variable-length head)
     FMT_RGB565_RLE      = 3,  // direct color RLE, opaque
-    FMT_RGB565A_RLE     = 4,  // direct color RLE, alpha inline
+    FMT_RGB565A_RLE     = 4,  // direct color RLE, alpha inline (variable-length head)
 };
 
 // formatInfo byte: bits 2:0 = format enum, bits 7:3 = paletteBits

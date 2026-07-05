@@ -12,8 +12,9 @@ if(CMAKE_CROSSCOMPILING)
 
     set(FTAB_SRC "${CMAKE_CURRENT_SOURCE_DIR}/main.c")
 
-    # On Windows, clang adds .exe automatically, so we need to handle both paths
-    if(WIN32)
+    # WIN32 = target platform; CMAKE_HOST_WIN32 = build host.
+    # On a Windows host, cmd.exe requires .exe extension to execute binaries.
+    if(CMAKE_HOST_WIN32)
         set(FTAB_EXE "${CMAKE_CURRENT_BINARY_DIR}/ftab_gen.exe")
     else()
         set(FTAB_EXE "${CMAKE_CURRENT_BINARY_DIR}/ftab_gen")
