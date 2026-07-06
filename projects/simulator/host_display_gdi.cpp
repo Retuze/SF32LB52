@@ -67,9 +67,12 @@ static inline uint32_t rgb565_to_bgra(uint16_t c)
     uint32_t r8 = (r5 << 3) | (r5 >> 2);   // 5→8
     uint32_t g8 = (g6 << 2) | (g6 >> 4);   // 6→8
     uint32_t b8 = (b5 << 3) | (b5 >> 2);   // 5→8
-    // GDI 32-bit DIB = BGRA byte order (little-endian: B byte at lowest addr).
-    // Alpha must be 0xFF, otherwise black pixels (0x00??????) appear transparent.
-    return 0xFF000000u | (b8 << 16) | (g8 << 8) | r8;
+    // GDI 32-bit DIB: little-endian uint32 = 0xAA_RR_GG_BB in memory.
+    // bits[ 0.. 7] = Blue  → byte[0] on LE = Blue
+    // bits[ 8..15] = Green → byte[1] on LE = Green
+    // bits[16..23] = Red   → byte[2] on LE = Red
+    // bits[24..31] = Alpha → byte[3] on LE = Alpha (0xFF = fully opaque)
+    return 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
 }
 
 // ═══════════════════════════════════════════════════════════════════

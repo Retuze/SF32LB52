@@ -32,9 +32,8 @@ static inline uint32_t rgb565_to_argb(uint16_t c)
     uint32_t r8 = (r5 << 3) | (r5 >> 2);   // 5→8
     uint32_t g8 = (g6 << 2) | (g6 >> 4);   // 6→8
     uint32_t b8 = (b5 << 3) | (b5 >> 2);   // 5→8
-    // X11 XImage with 32-bit depth on x86 = BGRA byte order (same as GDI).
-    // Alpha 0xFF prevents black pixels appearing as transparent.
-    return 0xFF000000u | (b8 << 16) | (g8 << 8) | r8;
+    // X11 32-bit XImage on x86: uint32 in memory = 0xAARRGGBB (same byte order as GDI DIB)
+    return 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
 }
 
 // ═══════════════════════════════════════════════════════════════════
