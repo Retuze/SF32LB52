@@ -154,11 +154,9 @@ public:
     void drawImage(const void* src, int fmt,
                    int srcW, int srcH, int dx, int dy,
                    const RGB565* tint = nullptr) {
-        printf("[drawImage] fmt=%d w=%d h=%d\r\n", fmt, srcW, srcH);
 
         int imageFormat = LITHO_FORMAT(fmt);
         int paletteSize = LITHO_PALETTE_SIZE(fmt);
-        printf("[drawImage] imageFmt=%d palSize=%d\r\n", imageFormat, paletteSize);
 
         int sx0 = dx + mScreenX;
         int sy0 = dy + mScreenY;
@@ -187,8 +185,7 @@ public:
 
         // ── FMT_A8_RLE (0): grayscale + RLE ─────────────────────
         if (imageFormat == 0) {
-            printf("[drawImage] FMT_A8_RLE path\r\n");
-            const uint8_t* rle = (const uint8_t*)src;
+                        const uint8_t* rle = (const uint8_t*)src;
             const uint32_t* off = (const uint32_t*)rle;
             uint16_t* tile = mTile->buffer();
             int tStride = mTile->stride();
@@ -243,8 +240,7 @@ public:
 
         // ── FMT_PAL_RLE (1): palette + RLE, opaque ───────────────
         if (imageFormat == 1) {
-            printf("[drawImage] FMT_PAL_RLE path\r\n");
-            const uint16_t* pal = (const uint16_t*)src;
+                        const uint16_t* pal = (const uint16_t*)src;
             const uint8_t*  rle = (const uint8_t*)src + paletteSize * 2;
             const uint32_t* off = (const uint32_t*)rle;
             uint16_t* tile = mTile->buffer();
@@ -284,39 +280,23 @@ public:
 
         // ── FMT_PAL_ALPHA_RLE (2): palette + RLE, alpha inline (variable-length head) ───
         if (imageFormat == 2) {
-            printf("[drawImage] FMT_PAL_ALPHA_RLE path\r\n");
             const uint16_t* pal = (const uint16_t*)src;
             const uint8_t*  rle = (const uint8_t*)src + paletteSize * 2;
             const uint32_t* off = (const uint32_t*)rle;
             uint16_t* tile = mTile->buffer();
             int tStride = mTile->stride();
             const int visL = srcOffX, visR = srcOffX + copyW;
-            bool dumped = false;
             for (int y = 0; y < copyH; y++) {
                 const uint8_t* p = rle + off[srcOffY + y];
                 uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
                 int px = 0;
                 int loopCnt = 0;
-                if (!dumped && y == 0) {
-                    printf("[drawImage] alpha row0: srcOffX=%d srcOffY=%d copyW=%d copyH=%d visL=%d visR=%d tx0=%d ty0=%d\r\n",
-                           srcOffX, srcOffY, copyW, copyH, visL, visR, tx0, ty0);
-                }
                 while (px < srcW) {
                     if (++loopCnt > srcW * 2) {
                         printf("[drawImage] PAL_ALPHA_RLE: loop overflow y=%d px=%d srcW=%d\r\n", y, px, srcW);
                         break;
                     }
                     uint8_t head = *p++;
-                    if (!dumped) {
-                        printf("[drawImage]   px=%d head=0x%02X ", px, head);
-                        if (head & 0x80) {
-                            uint8_t ix = *(p); // peek
-                            printf("OPAQUE n=%d ix=%d\r\n", (head & 0x7F) + 1, ix);
-                        } else {
-                            uint8_t tt = (head >> 5) & 3;
-                            printf("%s n=%d\r\n", tt==0?"TRANS":(tt==1?"ALPHA85":tt==2?"ALPHA170":"ALPHA213"), (head & 0x1F) + 1);
-                        }
-                    }
                     if (head & 0x80) {
                         // ── Opaque: α=255, 7-bit run length (1..128) ──
                         int n = (head & 0x7F) + 1;
@@ -356,7 +336,6 @@ public:
                         px = runR;
                     }
                 }
-                if (!dumped) { printf("[drawImage] row0 done, %d runs\r\n", loopCnt); dumped = true; }
             }
             return;
         }
