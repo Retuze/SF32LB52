@@ -291,17 +291,32 @@ public:
             uint16_t* tile = mTile->buffer();
             int tStride = mTile->stride();
             const int visL = srcOffX, visR = srcOffX + copyW;
+            bool dumped = false;
             for (int y = 0; y < copyH; y++) {
                 const uint8_t* p = rle + off[srcOffY + y];
                 uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
                 int px = 0;
                 int loopCnt = 0;
+                if (!dumped && y == 0) {
+                    printf("[drawImage] alpha row0: srcOffX=%d srcOffY=%d copyW=%d copyH=%d visL=%d visR=%d tx0=%d ty0=%d\r\n",
+                           srcOffX, srcOffY, copyW, copyH, visL, visR, tx0, ty0);
+                }
                 while (px < srcW) {
                     if (++loopCnt > srcW * 2) {
                         printf("[drawImage] PAL_ALPHA_RLE: loop overflow y=%d px=%d srcW=%d\r\n", y, px, srcW);
                         break;
                     }
                     uint8_t head = *p++;
+                    if (!dumped) {
+                        printf("[drawImage]   px=%d head=0x%02X ", px, head);
+                        if (head & 0x80) {
+                            uint8_t ix = *(p); // peek
+                            printf("OPAQUE n=%d ix=%d\r\n", (head & 0x7F) + 1, ix);
+                        } else {
+                            uint8_t tt = (head >> 5) & 3;
+                            printf("%s n=%d\r\n", tt==0?"TRANS":(tt==1?"ALPHA85":tt==2?"ALPHA170":"ALPHA213"), (head & 0x1F) + 1);
+                        }
+                    }
                     if (head & 0x80) {
                         // ── Opaque: α=255, 7-bit run length (1..128) ──
                         int n = (head & 0x7F) + 1;
@@ -341,6 +356,7 @@ public:
                         px = runR;
                     }
                 }
+                if (!dumped) { printf("[drawImage] row0 done, %d runs\r\n", loopCnt); dumped = true; }
             }
             return;
         }

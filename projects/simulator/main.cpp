@@ -67,14 +67,29 @@ public:
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
 
-        // Single centered alpha icon — isolate rendering issue
-        auto* iv = new ImageView(IMG_A_ALARM);
-        iv->bounds() = {
-            (int16_t)((kScreenW - 100) / 2),
-            (int16_t)((kScreenH - 100) / 2),
-            100, 100
+        // Background (renders first) — makes alpha transparency visible
+        root->addView(new ColorBg(RGB565::fromRGB(40, 40, 80)));
+
+        // Gallery: 12 icons, rows 1+4 are alpha (PAL_ALPHA_RLE), rows 2+3 opaque
+        static constexpr int kCols  = 3, kIconW = 100, kIconH = 100;
+        static constexpr int kGapX  = (kScreenW - kCols * kIconW) / (kCols + 1);
+        static constexpr int kGapY  = 15, kStartY = 40;
+
+        ImageId icons[] = {
+            IMG_A_DIAL,     IMG_A_MESSAGES, IMG_A_MUSIC,
+            IMG_SETTINGS,   IMG_CAMERA,     IMG_WEATHER,
+            IMG_CALENDAR,   IMG_COMPASS,    IMG_SPORTS,
+            IMG_A_CAMERA,   IMG_A_CALENDAR, IMG_A_COMPASS,
         };
-        root->addView(iv);
+
+        for (int i = 0; i < (int)(sizeof(icons) / sizeof(icons[0])); i++) {
+            int cx = kGapX + (i % kCols) * (kIconW + kGapX);
+            int cy = kStartY + (i / kCols) * (kIconH + kGapY);
+            auto* iv = new ImageView(icons[i]);
+            iv->bounds().x = (int16_t)cx;
+            iv->bounds().y = (int16_t)cy;
+            root->addView(iv);
+        }
     }
 
     void onResume() override {
