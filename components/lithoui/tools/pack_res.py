@@ -153,6 +153,7 @@ def encode_rle(values, w, h, alpha=None):
                     run = 1
                     while (x + run < w and run < max_run_alpha and
                            row[x + run] == v and
+                           not is_opaque_alpha(row_alpha[x + run]) and
                            quantize_alpha_nonopaque(row_alpha[x + run]) == tt):
                         run += 1
                     if tt == 0:
@@ -285,6 +286,7 @@ def encode_rle_rgb565_alpha(pixels, alphas, w, h):
                 run = 1
                 while (x + run < w and run < max_run_alpha and
                        row_pix[x + run] == c and
+                       not is_opaque_alpha(row_a[x + run]) and
                        quantize_alpha_nonopaque(row_a[x + run]) == tt):
                     run += 1
                 if tt == 0:
