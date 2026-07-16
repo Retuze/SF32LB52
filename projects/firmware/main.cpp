@@ -79,6 +79,20 @@ private:
     RGB565 mColor;
 };
 
+/* ColorBg — full-screen solid background. A non-black fill makes alpha
+ * transparency and any semi-transparent artifacts obvious. */
+class ColorBg : public View {
+public:
+    explicit ColorBg(RGB565 color) : mColor(color) {
+        mBounds = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+    }
+    void onDraw(Painter& p) override {
+        p.fillRect(0, 0, mBounds.width, mBounds.height, mColor);
+    }
+private:
+    RGB565 mColor;
+};
+
 class GalleryActivity : public Activity {
 public:
     void onCreate(Bundle&) override {
@@ -86,27 +100,31 @@ public:
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
 
-        // Simple color blocks instead of images - test rendering pipeline
-        static const int kCols = 3, kBoxW = 100, kBoxH = 100;
-        static const int kGapX = (kScreenW - kCols * kBoxW) / (kCols + 1);
+        // Background renders first — makes alpha transparency visible so any
+        // semi-transparent horizontal banding stands out against solid color.
+        root->addView(new ColorBg(RGB565::fromRGB(40, 40, 80)));
+
+        // Gallery: 12 icons. Rows 1 & 4 are alpha (PAL_ALPHA_RLE / RGB565A_RLE),
+        // rows 2 & 3 opaque. A_MUSIC/A_WEATHER exercise the fixed alpha encoder.
+        static const int kCols = 3, kIconW = 100, kIconH = 100;
+        static const int kGapX = (kScreenW - kCols * kIconW) / (kCols + 1);
         static const int kGapY = 15, kStartY = 40;
 
-        RGB565 colors[] = {
-            RGB565::fromRGB(255, 0, 0),    // red
-            RGB565::fromRGB(0, 255, 0),    // green
-            RGB565::fromRGB(0, 0, 255),    // blue
-            RGB565::fromRGB(255, 255, 0),  // yellow
-            RGB565::fromRGB(255, 0, 255),  // magenta
-            RGB565::fromRGB(0, 255, 255),  // cyan
+        ImageId icons[] = {
+            IMG_A_DIAL,     IMG_A_MESSAGES, IMG_A_MUSIC,
+            IMG_SETTINGS,   IMG_CAMERA,     IMG_WEATHER,
+            IMG_CALENDAR,   IMG_COMPASS,    IMG_SPORTS,
+            IMG_A_CAMERA,   IMG_A_CALENDAR, IMG_A_WEATHER,
         };
 
-        for (int i = 0; i < 6; i++) {
-            int cx = kGapX + (i % kCols) * (kBoxW + kGapX);
-            int cy = kStartY + (i / kCols) * (kBoxH + kGapY);
+        for (int i = 0; i < (int)(sizeof(icons) / sizeof(icons[0])); i++) {
+            int cx = kGapX + (i % kCols) * (kIconW + kGapX);
+            int cy = kStartY + (i / kCols) * (kIconH + kGapY);
 
-            auto* colorBox = new ColorBox(colors[i]);
-            colorBox->bounds() = {(int16_t)cx, (int16_t)cy, (int16_t)kBoxW, (int16_t)kBoxH};
-            root->addView(colorBox);
+            auto* iv = new ImageView(icons[i]);
+            iv->bounds().x = (int16_t)cx;
+            iv->bounds().y = (int16_t)cy;
+            root->addView(iv);
         }
     }
 
