@@ -331,7 +331,16 @@ def pack_pal8(path, with_alpha=False):
         rgb_data = [(r, g, b) for r, g, b, a in data]
         alpha_data = [a for r, g, b, a in data]
     else:
-        img = Image.open(path).convert("RGB")
+        img = Image.open(path)
+        if img.mode == 'RGBA':
+            # Composite against black to bake alpha into RGB values.
+            # Without this, semi-transparent edge pixels keep their full
+            # foreground colour after .convert("RGB") and produce hard
+            # aliased edges after opaque quantisation.
+            bg = Image.new('RGBA', img.size, (0, 0, 0, 255))
+            img = Image.alpha_composite(bg, img).convert("RGB")
+        else:
+            img = img.convert("RGB")
         w, h = img.size
         rgb_data = list(img.getdata())
         alpha_data = None
