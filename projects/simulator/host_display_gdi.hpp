@@ -33,6 +33,11 @@ public:
 
     HWND hwnd() const { return mHwnd; }
 
+    // Dump the current 390×450 backbuffer to a 24-bit BMP (headless capture).
+    // Bypasses the window / DPI / StretchBlt path entirely. Returns false on
+    // I/O error or if the backbuffer is not allocated.
+    bool saveBmp(const char* path) const;
+
 private:
     // Ring buffer for LithoUI events
     static constexpr int kEventCap = 64;

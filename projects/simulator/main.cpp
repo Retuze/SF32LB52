@@ -106,11 +106,25 @@ int main(int argc, char** argv)
 {
     printf("[sim] Watch Simulator — LithoUI Gallery\n");
 
+    // ── Parse args: [--dump <file.bmp>] [path/to/res_images.bin] ──
+    // --dump renders a few frames headlessly, writes the 390×450
+    // framebuffer to a BMP, and exits — no window interaction needed.
+    const char* dumpPath = nullptr;
+    const char* resPath  = "res_images.bin";
+    bool resSet = false;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
+            dumpPath = argv[++i];
+        } else if (!resSet) {
+            resPath = argv[i];
+            resSet = true;
+        }
+    }
+
     // 1. Load resource bundle
-    const char* resPath = (argc > 1) ? argv[1] : "res_images.bin";
     if (!ResLoader::init(resPath)) {
         fprintf(stderr, "[sim] FATAL: cannot load resource bundle.\n");
-        fprintf(stderr, "[sim] Usage: %s [path/to/res_images.bin]\n",
+        fprintf(stderr, "[sim] Usage: %s [--dump out.bmp] [path/to/res_images.bin]\n",
                 (argc > 0) ? argv[0] : "simulator");
         return 1;
     }
@@ -144,6 +158,26 @@ int main(int argc, char** argv)
     Intent intent;
     intent.target = "Gallery";
     am.startActivity(intent);
+
+    // ── Headless dump mode ───────────────────────────────────────
+    if (dumpPath) {
+        // Render enough frames for every PFB tile to flush (9 tiles at
+        // 390×50 cover the 450px height; a few extra frames for safety).
+        for (int i = 0; i < 30; i++) {
+            wm.invalidateAll();
+            wm.runOnce();
+        }
+#ifdef _WIN32
+        bool ok = display.saveBmp(dumpPath);
+        printf("[sim] dump %s -> %s\n", ok ? "OK" : "FAILED", dumpPath);
+        ResLoader::shutdown();
+        return ok ? 0 : 1;
+#else
+        fprintf(stderr, "[sim] --dump not implemented on this backend\n");
+        ResLoader::shutdown();
+        return 1;
+#endif
+    }
 
     printf("[sim] Running... (ESC or close window to quit)\n");
     wm.run();

@@ -380,4 +380,50 @@ void GdiDisplay::flush()
     }
 }
 
+bool GdiDisplay::saveBmp(const char* path) const
+{
+    if (!mBackbuf || mWidth <= 0 || mHeight <= 0) return false;
+
+    // 24-bit BMP: rows are bottom-up and padded to a 4-byte boundary.
+    const int rowBytes = (mWidth * 3 + 3) & ~3;
+    const int imgBytes = rowBytes * mHeight;
+
+#pragma pack(push, 1)
+    struct { uint16_t bfType; uint32_t bfSize; uint16_t r1, r2; uint32_t bfOffBits; } fh;
+    struct { uint32_t sz; int32_t w, h; uint16_t planes, bpp; uint32_t comp, imgSz;
+             int32_t xppm, yppm; uint32_t clrUsed, clrImp; } ih;
+#pragma pack(pop)
+
+    fh.bfType = 0x4D42;  // 'BM'
+    fh.bfOffBits = sizeof(fh) + sizeof(ih);
+    fh.bfSize = fh.bfOffBits + imgBytes;
+    fh.r1 = fh.r2 = 0;
+
+    ih.sz = sizeof(ih); ih.w = mWidth; ih.h = mHeight;
+    ih.planes = 1; ih.bpp = 24; ih.comp = 0; ih.imgSz = imgBytes;
+    ih.xppm = ih.yppm = 2835; ih.clrUsed = ih.clrImp = 0;
+
+    FILE* f = fopen(path, "wb");
+    if (!f) return false;
+    fwrite(&fh, sizeof(fh), 1, f);
+    fwrite(&ih, sizeof(ih), 1, f);
+
+    uint8_t* row = (uint8_t*)calloc(1, rowBytes);
+    if (!row) { fclose(f); return false; }
+    // Emit bottom-up: BMP row 0 is the image's last scanline.
+    for (int y = mHeight - 1; y >= 0; y--) {
+        const uint32_t* src = mBackbuf + (size_t)y * mWidth;
+        for (int x = 0; x < mWidth; x++) {
+            uint32_t px = src[x];            // 0xAARRGGBB
+            row[x * 3 + 0] = (uint8_t)(px);        // B
+            row[x * 3 + 1] = (uint8_t)(px >> 8);   // G
+            row[x * 3 + 2] = (uint8_t)(px >> 16);  // R
+        }
+        fwrite(row, rowBytes, 1, f);
+    }
+    free(row);
+    fclose(f);
+    return true;
+}
+
 } // namespace litho
