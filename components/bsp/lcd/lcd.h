@@ -88,6 +88,7 @@ void lcd_bitblt(uint16_t x, uint16_t y, uint16_t w, uint16_t h,
 /* Async support helpers — weak defaults, overridden by LCDC bus driver */
 void lcd_wait_idle(void);
 uint32_t lcd_xfer_cycles(void);
+uint32_t lcd_wait_cycles(void);
 void     lcd_clear_xfer_cycles(void);
 
 /* TE frame sync — weak defaults: GPIO EXTI on LCD_TE pin */

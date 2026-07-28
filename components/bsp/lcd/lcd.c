@@ -103,6 +103,9 @@ __attribute__((weak))
 uint32_t lcd_xfer_cycles(void) { return 0; }
 
 __attribute__((weak))
+uint32_t lcd_wait_cycles(void) { return 0; }
+
+__attribute__((weak))
 void lcd_clear_xfer_cycles(void) {}
 
 /* ── TE frame sync ──────────────────────────────────────────────────────── */

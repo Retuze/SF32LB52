@@ -34,6 +34,8 @@ public:
 
     /** Optional: transfer time in CPU cycles (0 if not tracked). */
     virtual uint32_t transferCycles()    const { return 0; }
+    /** Optional: time spent blocked waiting for previous DMA to finish. */
+    virtual uint32_t waitCycles()        const { return 0; }
     virtual void     clearTransferCycles()     {}
 };
 

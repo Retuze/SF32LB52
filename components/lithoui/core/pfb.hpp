@@ -57,25 +57,30 @@ public:
     int cols()   const { return mCols; }
     int rows()   const { return mRows; }
 
-    // Per-frame stats
+    // Per-frame stats — clears all accumulators for the next frame.
+    // Call commitXferStats() first to snapshot pending DMA xfer data.
     void clearStats()  {
-        mStatDraw=0; mStatSetup=0; mStatXfer=0; mStatTiles=0;
+        mStatDraw=0; mStatSetup=0; mStatXfer=0; mStatWaitDMA=0; mStatTiles=0;
         mStatWaitTE=0; mStatWaitBuff=0; mStatPoll=0;
         for (int i = 0; i < 9; i++) {
             mTileDraw[i] = 0;
             mTileXfer[i] = 0;
+            mTileXferPending[i] = 0;
+            mTileWaitDMA[i] = 0;
             mTileWaitBuff[i] = 0;
         }
     }
     uint32_t statDraw()     const { return mStatDraw; }
     uint32_t statSetup()    const { return mStatSetup; }
     uint32_t statXfer()     const { return mStatXfer; }
+    uint32_t statWaitDMA()  const { return mStatWaitDMA; }
     uint32_t statTiles()    const { return mStatTiles; }
     uint32_t statWaitTE()   const { return mStatWaitTE; }
     uint32_t statWaitBuff() const { return mStatWaitBuff; }
     uint32_t statPoll()     const { return mStatPoll; }
     uint32_t tileDraw(int i)     const { return (i < (int)mStatTiles) ? mTileDraw[i] : 0; }
     uint32_t tileXfer(int i)     const { return (i < (int)mStatTiles) ? mTileXfer[i] : 0; }
+    uint32_t tileWaitDMA(int i)  const { return (i < (int)mStatTiles) ? mTileWaitDMA[i] : 0; }
     uint32_t tileWaitBuff(int i) const { return (i < (int)mStatTiles) ? mTileWaitBuff[i] : 0; }
 
     // Iterate the blocks covering a screen region. For each block:
@@ -99,30 +104,6 @@ public:
         if (r1 > mRows) r1 = mRows;
 
         Painter painter;
-
-        // Async slot tracking — allow up to poolSize in-flight xfers
-        struct AsyncSlot {
-            Tile* tile = nullptr;
-            volatile int done = 0;
-            uint32_t submitCycle = 0;
-            volatile uint32_t doneCycle = 0;
-            int statIndex = 0;
-        };
-        AsyncSlot slots[4];  // max 4 in-flight
-
-        auto releaseCompleted = [&]() {
-            for (int i = 0; i < mPoolSize && i < 4; i++) {
-                if (slots[i].tile != nullptr && slots[i].done) {
-                    if (slots[i].statIndex < 9) {
-                        mTileXfer[slots[i].statIndex] =
-                            slots[i].doneCycle - slots[i].submitCycle;
-                    }
-                    releaseTile(*slots[i].tile);
-                    slots[i].tile = nullptr;
-                    slots[i].done = 0;
-                }
-            }
-        };
 
         auto waitForFreeTile = [&]() {
             releaseCompleted();
@@ -169,18 +150,18 @@ public:
                 // Find free async slot
                 int slotIndex = -1;
                 for (int i = 0; i < mPoolSize && i < 4; i++) {
-                    if (slots[i].tile == nullptr) { slotIndex = i; break; }
+                    if (mSlots[i].tile == nullptr) { slotIndex = i; break; }
                 }
                 if (slotIndex < 0) {
                     display.waitReady();
                     releaseCompleted();
                     for (int i = 0; i < mPoolSize && i < 4; i++) {
-                        if (slots[i].tile == nullptr) { slotIndex = i; break; }
+                        if (mSlots[i].tile == nullptr) { slotIndex = i; break; }
                     }
                 }
 
                 int ti = mStatTiles;
-                AsyncSlot& slot = slots[slotIndex];
+                AsyncSlot& slot = mSlots[slotIndex];
                 slot.tile = &tile;
                 slot.done = 0;
                 slot.submitCycle = dwt_cycles();
@@ -193,16 +174,19 @@ public:
                     mStatWaitTE = dwt_cycles() - tte0;
                 }
 
+                uint32_t waitBefore = display.waitCycles();
                 display.bitbltAsync(tile.buffer(), bx, by, bw, bh,
                     [](void* ctx) {
                         auto* s = static_cast<AsyncSlot*>(ctx);
                         s->doneCycle = dwt_cycles();
                         s->done = 1;
                     }, &slot);
+                uint32_t waitDelta = display.waitCycles() - waitBefore;
 
-                if (ti < 9) { mTileDraw[ti] = ts2 - ts1; mTileXfer[ti] = 0; }
+                if (ti < 9) { mTileDraw[ti] = ts2 - ts1; mTileXferPending[ti] = 0; mTileWaitDMA[ti] = waitDelta; }
                 mStatSetup += ts1 - ts0;
                 mStatDraw  += ts2 - ts1;
+                mStatWaitDMA += waitDelta;
                 mStatTiles++;
             }
         }
@@ -213,16 +197,43 @@ public:
         onIdle();
         mStatPoll = dwt_cycles() - tpoll0;
 
-        // Drain remaining async xfers
-        display.waitReady();
-        releaseCompleted();
+        // NOTE: Do NOT drain async xfers here.  The last tile's DMA is left
+        // running so the NEXT frame's first tile draw can overlap with it.
+        // flush() in the caller (WindowManager::runOnce) will waitReady() and
+        // the xfer stats are collected as a pre/post-flush snapshot.
+    }
+
+    // ---- Async DMA slot tracking (cross-frame persistent) ----
+
+    struct AsyncSlot {
+        Tile* tile = nullptr;
+        volatile int done = 0;
+        uint32_t submitCycle = 0;
+        volatile uint32_t doneCycle = 0;
+        int statIndex = 0;
+    };
+
+    void releaseCompleted() {
         for (int i = 0; i < mPoolSize && i < 4; i++) {
-            if (slots[i].tile != nullptr) {
-                releaseTile(*slots[i].tile);
-                slots[i].tile = nullptr;
+            if (mSlots[i].tile != nullptr && mSlots[i].done) {
+                if (mSlots[i].statIndex < 9) {
+                    mTileXferPending[mSlots[i].statIndex] =
+                        mSlots[i].doneCycle - mSlots[i].submitCycle;
+                }
+                releaseTile(*mSlots[i].tile);
+                mSlots[i].tile = nullptr;
+                mSlots[i].done = 0;
             }
         }
-        mStatXfer = display.transferCycles();
+    }
+
+    // Commit pending xfer stats (from DMA callbacks) to committed array.
+    // Called after flush() once all DMA is confirmed done.
+    void commitXferStats() {
+        releaseCompleted();  // harvest any remaining DMA callbacks
+        for (int i = 0; i < 9; i++) {
+            mTileXfer[i] = mTileXferPending[i];
+        }
     }
 
 private:
@@ -270,12 +281,16 @@ private:
     uint32_t  mStatSetup = 0;
     uint32_t  mStatDraw  = 0;
     uint32_t  mStatXfer  = 0;
+    uint32_t  mStatWaitDMA = 0;   // Time blocked in bitbltAsync waiting for DMA
     uint32_t  mStatTiles = 0;
     uint32_t  mStatWaitTE = 0;    // Cycles waiting for TE before first tile xfer
     uint32_t  mStatWaitBuff = 0;  // Cycles waiting for buffer available (pool full)
     uint32_t  mStatPoll = 0;      // Cycles in onIdle (touch poll + dispatch)
+    AsyncSlot mSlots[4] = {};         // async DMA slots (cross-frame persistent)
     uint32_t  mTileDraw[9] = {};
-    uint32_t  mTileXfer[9] = {};
+    uint32_t  mTileXfer[9] = {};      // committed per-tile xfer (from previous frame)
+    uint32_t  mTileXferPending[9] = {}; // live per-tile xfer (filled by DMA callbacks)
+    uint32_t  mTileWaitDMA[9] = {};   // Per-tile: blocked in bitbltAsync waiting for DMA
     uint32_t  mTileWaitBuff[9] = {};  // Per-tile wait time before acquiring buffer
 };
 

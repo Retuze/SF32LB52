@@ -104,6 +104,18 @@ public:
         // semi-transparent horizontal banding stands out against solid color.
         root->addView(new ColorBg(RGB565::fromRGB(40, 40, 80)));
 
+        // Icon container — holds the gallery icons; scrolled by ScrollableRoot.
+        auto* iconContainer = new ViewGroup();
+        iconContainer->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)(kScreenH + 200)};
+        root->addView(iconContainer);
+
+        // Scroll handler — intercepts touch, applies translationY to iconContainer.
+        // Added AFTER iconContainer so it's hit-tested first (reverse draw order).
+        auto* scroller = new ScrollableRoot();
+        scroller->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        scroller->setScrollTarget(iconContainer);
+        root->addView(scroller);
+
         // Gallery: 12 icons. Rows 1 & 4 are alpha (PAL_ALPHA_RLE / RGB565A_RLE),
         // rows 2 & 3 opaque. A_MUSIC/A_WEATHER exercise the fixed alpha encoder.
         static const int kCols = 3, kIconW = 100, kIconH = 100;
@@ -124,7 +136,7 @@ public:
             auto* iv = new ImageView(icons[i]);
             iv->bounds().x = (int16_t)cx;
             iv->bounds().y = (int16_t)cy;
-            root->addView(iv);
+            iconContainer->addView(iv);
         }
     }
 
