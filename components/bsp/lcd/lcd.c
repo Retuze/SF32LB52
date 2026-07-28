@@ -140,10 +140,6 @@ void lcd_te_init(void)
 __attribute__((weak))
 void lcd_te_wait(void)
 {
-    // TEMPORARY: skip TE wait for bit-bang GPIO bus testing
-    // TODO: debug why TE interrupt is not firing on pad 2
-    return;
-
     s_te_flag = 0;
     while (!s_te_flag) { /* spin */ }
     s_te_flag = 0;
