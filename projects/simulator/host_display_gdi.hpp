@@ -67,6 +67,12 @@ private:
     int        mWinW      = 0;         // window client width (mWidth * mScale)
     int        mWinH      = 0;         // window client height (mHeight * mScale)
     bool       mButtonDown = false;
+
+    // Latest-touch cache — high-frequency mouse events update this directly
+    // instead of queuing into the ring buffer.  pollEvent() returns the
+    // latest state once per frame (like firmware's g_tp_irq_fired + tp_read).
+    Event      mLatestTouch;
+    bool       mHasTouch   = false;
 };
 
 } // namespace litho

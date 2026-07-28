@@ -26,7 +26,8 @@
 #include "framework/window/window_manager.hpp"
 #include "framework/activity/activity_manager.hpp"
 #include "framework/intent/intent.hpp"
-#include "framework/widget/image_view.hpp"
+#include "framework/widget/image.hpp"
+#include "framework/widget/scroll.hpp"
 #include "res_images.h"
 
 // ── 4. Platform-specific port adapters ──────────────────────────
@@ -70,6 +71,11 @@ public:
         // Background (renders first) — makes alpha transparency visible
         root->addView(new ColorBg(RGB565::fromRGB(40, 40, 80)));
 
+        // ScrollView — holds gallery icons, scrollable via mouse drag.
+        auto* scroll = new ScrollView();
+        scroll->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        root->addView(scroll);
+
         // Gallery: 12 icons, rows 1+4 are alpha (PAL_ALPHA_RLE), rows 2+3 opaque
         static constexpr int kCols  = 3, kIconW = 100, kIconH = 100;
         static constexpr int kGapX  = (kScreenW - kCols * kIconW) / (kCols + 1);
@@ -88,7 +94,7 @@ public:
             auto* iv = new ImageView(icons[i]);
             iv->bounds().x = (int16_t)cx;
             iv->bounds().y = (int16_t)cy;
-            root->addView(iv);
+            scroll->addView(iv);
         }
     }
 
@@ -180,7 +186,11 @@ int main(int argc, char** argv)
     }
 
     printf("[sim] Running... (ESC or close window to quit)\n");
-    wm.run();
+    // Continuous render loop — match firmware pattern with invalidateAll + runOnce
+    while (true) {
+        wm.invalidateAll();
+        if (!wm.runOnce()) break;
+    }
 
     printf("[sim] Quit. Goodbye.\n");
     ResLoader::shutdown();

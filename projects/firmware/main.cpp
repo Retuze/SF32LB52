@@ -17,7 +17,8 @@ extern "C" {
 #include "framework/activity/activity.hpp"
 #include "framework/activity/activity_manager.hpp"
 #include "framework/intent/intent.hpp"
-#include "framework/widget/image_view.hpp"
+#include "framework/widget/image.hpp"
+#include "framework/widget/scroll.hpp"
 #include "res_images.h"
 
 #include "port/sf32lb52/sf32_display.hpp"
@@ -28,43 +29,6 @@ using namespace litho;
 
 static const int kScreenW = LCD_WIDTH;
 static const int kScreenH = LCD_HEIGHT;
-
-/* ScrollableRoot — intercept touch to scroll icon container vertically. */
-class ScrollableRoot : public ViewGroup {
-public:
-    void setScrollTarget(ViewGroup* t) { mTarget = t; }
-
-    bool dispatchTouchEvent(TouchEvent& ev, int sx, int sy) override {
-        if (!mTarget) return false;
-
-        if (ev.action == TouchAction::DOWN) {
-            mLastY = ev.y;
-            mTracking = true;
-            ev.handler   = this;
-            ev.handlerSX = sx;
-            ev.handlerSY = sy;
-            return true;
-        }
-        if (ev.action == TouchAction::MOVE && mTracking) {
-            int dy = ev.y - mLastY;
-            mLastY  = ev.y;
-            mScroll += dy;
-            mTarget->setTranslationY((int16_t)mScroll);
-            return true;
-        }
-        if (ev.action == TouchAction::UP) {
-            mTracking = false;
-            return true;
-        }
-        return false;
-    }
-
-private:
-    ViewGroup* mTarget = nullptr;
-    int mLastY  = 0;
-    int mScroll = 0;
-    bool mTracking = false;
-};
 
 /* ColorBox — simple solid color rectangle for testing */
 class ColorBox : public View {
@@ -104,17 +68,12 @@ public:
         // semi-transparent horizontal banding stands out against solid color.
         root->addView(new ColorBg(RGB565::fromRGB(40, 40, 80)));
 
-        // Icon container — holds the gallery icons; scrolled by ScrollableRoot.
-        auto* iconContainer = new ViewGroup();
-        iconContainer->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)(kScreenH + 200)};
-        root->addView(iconContainer);
-
-        // Scroll handler — intercepts touch, applies translationY to iconContainer.
-        // Added AFTER iconContainer so it's hit-tested first (reverse draw order).
-        auto* scroller = new ScrollableRoot();
-        scroller->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
-        scroller->setScrollTarget(iconContainer);
-        root->addView(scroller);
+        // ScrollView — holds gallery icons, scrolls them vertically on touch drag.
+        // Like Android's ScrollView: children are added directly, scroll offset
+        // is self-contained (applied in onDraw via mScrollY).
+        auto* scroll = new ScrollView();
+        scroll->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        root->addView(scroll);
 
         // Gallery: 12 icons. Rows 1 & 4 are alpha (PAL_ALPHA_RLE / RGB565A_RLE),
         // rows 2 & 3 opaque. A_MUSIC/A_WEATHER exercise the fixed alpha encoder.
@@ -136,7 +95,7 @@ public:
             auto* iv = new ImageView(icons[i]);
             iv->bounds().x = (int16_t)cx;
             iv->bounds().y = (int16_t)cy;
-            iconContainer->addView(iv);
+            scroll->addView(iv);
         }
     }
 

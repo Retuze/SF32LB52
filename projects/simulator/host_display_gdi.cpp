@@ -57,22 +57,23 @@ int get_dpi_scale(HWND hwnd)
 //  RGB565 → XRGB8888 conversion
 // ═══════════════════════════════════════════════════════════════════
 
-static inline uint32_t rgb565_to_bgra(uint16_t c)
-{
-    // Extract 5/6/5 bits
-    uint32_t r5 = (c >> 11) & 0x1F;
-    uint32_t g6 = (c >>  5) & 0x3F;
-    uint32_t b5 = (c      ) & 0x1F;
-    // Expand to 8-bit (0..31 → 0..255, 0..63 → 0..255)
-    uint32_t r8 = (r5 << 3) | (r5 >> 2);   // 5→8
-    uint32_t g8 = (g6 << 2) | (g6 >> 4);   // 6→8
-    uint32_t b8 = (b5 << 3) | (b5 >> 2);   // 5→8
-    // GDI 32-bit DIB: little-endian uint32 = 0xAA_RR_GG_BB in memory.
-    // bits[ 0.. 7] = Blue  → byte[0] on LE = Blue
-    // bits[ 8..15] = Green → byte[1] on LE = Green
-    // bits[16..23] = Red   → byte[2] on LE = Red
-    // bits[24..31] = Alpha → byte[3] on LE = Alpha (0xFF = fully opaque)
-    return 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
+// 64K lookup table: RGB565 → XRGB8888 (built once on first call)
+static uint32_t* lut565_bgra() {
+    static uint32_t table[65536];
+    static bool built = false;
+    if (!built) {
+        for (int i = 0; i < 65536; i++) {
+            uint32_t r5 = (i >> 11) & 0x1F;
+            uint32_t g6 = (i >>  5) & 0x3F;
+            uint32_t b5 = (i      ) & 0x1F;
+            uint32_t r8 = (r5 << 3) | (r5 >> 2);
+            uint32_t g8 = (g6 << 2) | (g6 >> 4);
+            uint32_t b8 = (b5 << 3) | (b5 >> 2);
+            table[i] = 0xFF000000u | (r8 << 16) | (g8 << 8) | b8;
+        }
+        built = true;
+    }
+    return table;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -89,6 +90,15 @@ void GdiDisplay::pushEvent(const Event& e)
 
 bool GdiDisplay::pollEvent(Event& out)
 {
+    // Touch events: return latest aggregated state (like firmware's
+    // g_tp_irq_fired + tp_read).  High-frequency MOVE events only update
+    // mLatestTouch — only the final position matters per frame.
+    if (mHasTouch) {
+        out = mLatestTouch;
+        mHasTouch = false;
+        return true;
+    }
+    // Other events (KEY, QUIT) still use the ring buffer
     if (mEventTail == mEventHead) return false;
     out = mEvents[mEventTail];
     mEventTail = (mEventTail + 1) % kEventCap;
@@ -138,29 +148,29 @@ LRESULT GdiDisplay::wndProc(UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_LBUTTONDOWN:
         mButtonDown = true;
-        ev.type = EventType::TOUCH;
-        ev.touch.action = TouchAction::DOWN;
-        ev.touch.x = GET_X_LPARAM(lp) / mScale;
-        ev.touch.y = GET_Y_LPARAM(lp) / mScale;
-        pushEvent(ev);
+        mLatestTouch.type = EventType::TOUCH;
+        mLatestTouch.touch.action = TouchAction::DOWN;
+        mLatestTouch.touch.x = GET_X_LPARAM(lp) / mScale;
+        mLatestTouch.touch.y = GET_Y_LPARAM(lp) / mScale;
+        mHasTouch = true;
         return 0;
 
     case WM_LBUTTONUP:
         mButtonDown = false;
-        ev.type = EventType::TOUCH;
-        ev.touch.action = TouchAction::UP;
-        ev.touch.x = GET_X_LPARAM(lp) / mScale;
-        ev.touch.y = GET_Y_LPARAM(lp) / mScale;
-        pushEvent(ev);
+        mLatestTouch.type = EventType::TOUCH;
+        mLatestTouch.touch.action = TouchAction::UP;
+        mLatestTouch.touch.x = GET_X_LPARAM(lp) / mScale;
+        mLatestTouch.touch.y = GET_Y_LPARAM(lp) / mScale;
+        mHasTouch = true;
         return 0;
 
     case WM_MOUSEMOVE:
         if (mButtonDown) {
-            ev.type = EventType::TOUCH;
-            ev.touch.action = TouchAction::MOVE;
-            ev.touch.x = GET_X_LPARAM(lp) / mScale;
-            ev.touch.y = GET_Y_LPARAM(lp) / mScale;
-            pushEvent(ev);
+            mLatestTouch.type = EventType::TOUCH;
+            mLatestTouch.touch.action = TouchAction::MOVE;
+            mLatestTouch.touch.x = GET_X_LPARAM(lp) / mScale;
+            mLatestTouch.touch.y = GET_Y_LPARAM(lp) / mScale;
+            mHasTouch = true;
         }
         return 0;
 
@@ -351,16 +361,27 @@ void GdiDisplay::bitblt(const uint16_t* data, int x, int y, int w, int h)
 
     // Clip to screen bounds
     if (x < 0) { w += x; data -= x; x = 0; }
-    if (y < 0) { h += y; data -= y * w; y = 0; }  // careful: careful with shift
+    if (y < 0) { h += y; data -= y * w; y = 0; }
     if (x + w > mWidth)  w = mWidth  - x;
     if (y + h > mHeight) h = mHeight - y;
     if (w <= 0 || h <= 0) return;
 
+    const uint32_t* lut = lut565_bgra();
+
     for (int row = 0; row < h; row++) {
         uint32_t*       dst = mBackbuf + (y + row) * mWidth + x;
         const uint16_t* src = data + row * w;
-        for (int col = 0; col < w; col++) {
-            dst[col] = rgb565_to_bgra(src[col]);
+
+        // Process 4 pixels at a time for better CPU pipeline throughput
+        int col = 0;
+        for (; col + 3 < w; col += 4) {
+            dst[col    ] = lut[src[col    ]];
+            dst[col + 1] = lut[src[col + 1]];
+            dst[col + 2] = lut[src[col + 2]];
+            dst[col + 3] = lut[src[col + 3]];
+        }
+        for (; col < w; col++) {
+            dst[col] = lut[src[col]];
         }
     }
 }
