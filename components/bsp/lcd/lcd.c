@@ -77,6 +77,9 @@ __attribute__((weak))
 uint32_t lcd_xfer_cycles(void) { return 0; }
 
 __attribute__((weak))
+uint32_t lcd_wait_cycles(void) { return 0; }
+
+__attribute__((weak))
 void lcd_clear_xfer_cycles(void) {}
 
 /* ── TE frame sync ──────────────────────────────────────────────────────── */
@@ -111,10 +114,6 @@ void lcd_te_init(void)
 __attribute__((weak))
 void lcd_te_wait(void)
 {
-    // TEMPORARY: skip TE wait for bit-bang GPIO bus testing
-    // TODO: debug why TE interrupt is not firing on pad 2
-    return;
-
     s_te_flag = 0;
     while (!s_te_flag) { /* spin */ }
     s_te_flag = 0;

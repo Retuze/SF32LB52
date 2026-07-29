@@ -184,11 +184,10 @@ const uintptr_t g_pfnVectors[16U + IRQ_VECTORS] = {
     [(uintptr_t)14] = (uintptr_t)PendSV_Handler,
     [(uintptr_t)15] = (uintptr_t)SysTick_Handler,
 
-    /* 16-99: Peripheral interrupts — default to def_handler
-     * (GCC/Clang range-designator extension, both compilers support it) */
-    [16 ... 99] = (uintptr_t)def_handler,
-
-    /* Override with real handlers for enabled IRQs */
+    /* 16-99: Peripheral interrupts — default to def_handler.
+     * Split around slot 79 (LCDC1) to avoid -Winitializer-overrides. */
+    [16 ... 78] = (uintptr_t)def_handler,
+    [16U + 63U]                    = (uintptr_t)LCDC1_IRQHandler,   /* LCDC1 (slot 79) */
+    [80 ... 99] = (uintptr_t)def_handler,
     [16U + (uintptr_t)GPIO1_IRQn]  = (uintptr_t)GPIO1_IRQHandler,  /* index 100 */
-    [16U + 63U]                    = (uintptr_t)LCDC1_IRQHandler,   /* LCDC1 */
 };

@@ -51,8 +51,13 @@ def make_format_info(fmt, palette_bits):
     """
     return (palette_bits << 3) | fmt
 
-# Alpha levels (2 bits → 4 levels) for alpha formats
-ALPHA_LEVELS = [0, 85, 170, 255]
+# Alpha encoding for non-opaque runs (bit7=0 → TT in bits 6:5):
+#   TT=00 → α=0   (fully transparent, no color data)
+#   TT=01 → α=85  (semi-transparent level 1)
+#   TT=10 → α=170 (semi-transparent level 2)
+#   TT=11 → α=213 (semi-transparent level 3, NOT 255 — 255 uses bit7=1)
+NONOPAQUE_ALPHA_LEVELS = [0, 85, 170, 213]
+OPAQUE_THRESHOLD = 234  # α >= this → bit7=1 (fully opaque, 7-bit run length)
 
 FLAG_HAS_SIN  = 0x0001
 
@@ -78,12 +83,17 @@ def luminance(r, g, b):
     return (r * 77 + g * 150 + b * 29) // 256
 
 
-def quantize_alpha(a):
-    """Map 0..255 alpha to nearest 2-bit level (0..3)."""
-    if a >= 213: return 3       # 255
-    if a >= 128: return 2       # 170
-    if a >= 43:  return 1       # 85
-    return 0                     # 0
+def quantize_alpha_nonopaque(a):
+    """Quantize alpha for non-opaque encoding (bit7=0). Returns TT value (0..3).
+    Thresholds are midpoints between the 4 non-opaque alpha levels (0, 85, 170, 213)."""
+    if a >= 191: return 3       # α=213
+    if a >= 128: return 2       # α=170
+    if a >= 43:  return 1       # α=85
+    return 0                     # α=0
+
+def is_opaque_alpha(a):
+    """Check if alpha qualifies for opaque encoding (bit7=1, α=255)."""
+    return a >= OPAQUE_THRESHOLD
 
 
 # ── unified RLE encoder ─────────────────────────────────────────────
@@ -95,20 +105,24 @@ def encode_rle(values, w, h, alpha=None):
     No-alpha formats (alpha=None, FMT_A8_RLE / FMT_PAL_RLE):
       [value_byte][length_byte]  — length = count-1 (0..255, 1..256 pixels)
 
-    Alpha format (FMT_PAL_ALPHA_RLE):
-      Head byte: [TTT|LLLLL]  (TTT=bits7:5, LLLLL=bits4:0=run_len-1)
-        TT=00 (alpha=0,  fully transparent): 1-byte record, no color data
-        TT=01 (alpha=255, opaque):            head + [palette_idx]
-        TT=10 (alpha=85):                     head + [palette_idx]
-        TT=11 (alpha=170):                    head + [palette_idx]
-      Run length = (head & 0x3F) + 1 = 1..64
+    Alpha format (FMT_PAL_ALPHA_RLE) — variable-length head byte:
+      bit7=1 (opaque, α=255):
+        [1|LLLLLLL]  LLLLLLL = run_len-1 (0..127 → 1..128 pixels)
+        Followed by [palette_idx]
+      bit7=0 (non-opaque):
+        [0|TT|LLLLL]  TT=bits6:5 (alpha level), LLLLL=bits4:0=run_len-1 (0..31 → 1..32)
+        TT=00 (α=0):   1-byte record, no color data
+        TT=01 (α=85):  head + [palette_idx]
+        TT=10 (α=170): head + [palette_idx]
+        TT=11 (α=213): head + [palette_idx]
 
     Returns bytes: [h*4 offset table][RLE stream].
     """
     out = bytearray(h * 4)  # placeholder for offset table
-    max_run_no_alpha = 256   # full 8-bit length
-    max_run           = 64   # max run for alpha formats
-    ROW_RAW_FLAG      = 0x80000000
+    max_run_no_alpha = 256   # full 8-bit length for no-alpha formats
+    max_run_opaque   = 128   # max run for opaque alpha (7-bit length)
+    max_run_alpha    = 32    # max run for non-opaque alpha (5-bit length)
+    ROW_RAW_FLAG     = 0x80000000
 
     for y in range(h):
         row = values[y * w:(y + 1) * w]
@@ -121,29 +135,34 @@ def encode_rle(values, w, h, alpha=None):
             v = row[x]
 
             if row_alpha:
-                # ── PAL_ALPHA_RLE ────────────────────────────
-                a_cur = quantize_alpha(row_alpha[x])
+                # ── PAL_ALPHA_RLE (new variable-length encoding) ──
+                a_val = row_alpha[x]
+                opaque = is_opaque_alpha(a_val)
 
-                run = 1
-                while (x + run < w and run < max_run and
-                       row[x + run] == v and quantize_alpha(row_alpha[x + run]) == a_cur):
-                    run += 1
-
-                if a_cur == 0:
-                    # TT=00 → alpha=0 (transparent, no color data)
-                    out.append(0x00 | (run - 1))
-                elif a_cur == 1:
-                    # TT=10 → alpha=85 (semi-transparent)
+                if opaque:
+                    # bit7=1: fully opaque, α=255, 7-bit run length
+                    run = 1
+                    while (x + run < w and run < max_run_opaque and
+                           row[x + run] == v and is_opaque_alpha(row_alpha[x + run])):
+                        run += 1
                     out.append(0x80 | (run - 1))
                     out.append(v)
-                elif a_cur == 2:
-                    # TT=11 → alpha=170 (semi-transparent)
-                    out.append(0xC0 | (run - 1))
-                    out.append(v)
-                else:  # a_cur == 3
-                    # TT=01 → alpha=255 (opaque)
-                    out.append(0x40 | (run - 1))
-                    out.append(v)
+                else:
+                    # bit7=0: non-opaque, TT + 5-bit run length
+                    tt = quantize_alpha_nonopaque(a_val)
+                    run = 1
+                    while (x + run < w and run < max_run_alpha and
+                           row[x + run] == v and
+                           not is_opaque_alpha(row_alpha[x + run]) and
+                           quantize_alpha_nonopaque(row_alpha[x + run]) == tt):
+                        run += 1
+                    if tt == 0:
+                        # α=0: fully transparent, no color data
+                        out.append(run - 1)  # TT=00 in bits 6:5
+                    else:
+                        # TT=01→α=85, TT=10→α=170, TT=11→α=213
+                        out.append((tt << 5) | (run - 1))
+                        out.append(v)
                 x += run
             else:
                 # ── A8_RLE / PAL_RLE (no alpha): per-row adaptive ─
@@ -226,18 +245,22 @@ def encode_rle_rgb565_alpha(pixels, alphas, w, h):
     """
     RLE for FMT_RGB565A_RLE. Row offset table + variable-length records.
 
-    Record format (same head byte as PAL_ALPHA_RLE):
-      Head: [TT|LLLLLL]
-        TT=00 (alpha=0,  fully transparent): 1-byte record, no color
-        TT=01 (alpha=255, opaque):            head + [c_lo][c_hi]
-        TT=10 (alpha=85):                     head + [c_lo][c_hi]
-        TT=11 (alpha=170):                    head + [c_lo][c_hi]
-      Run length = (head & 0x3F) + 1 = 1..64
+    Record format (variable-length head byte):
+      bit7=1 (opaque, α=255):
+        [1|LLLLLLL]  LLLLLLL = run_len-1 (0..127 → 1..128 pixels)
+        Followed by [c_lo][c_hi]
+      bit7=0 (non-opaque):
+        [0|TT|LLLLL]  TT=bits6:5 (alpha level), LLLLL=bits4:0=run_len-1 (0..31 → 1..32)
+        TT=00 (α=0):   1-byte record, no color data
+        TT=01 (α=85):  head + [c_lo][c_hi]
+        TT=10 (α=170): head + [c_lo][c_hi]
+        TT=11 (α=213): head + [c_lo][c_hi]
 
     Returns bytes: [h*4 off][RLE stream].
     """
     out = bytearray(h * 4)
-    max_run = 32
+    max_run_opaque = 128
+    max_run_alpha  = 32
 
     for y in range(h):
         struct.pack_into('<I', out, y * 4, len(out))
@@ -246,24 +269,32 @@ def encode_rle_rgb565_alpha(pixels, alphas, w, h):
         x = 0
         while x < w:
             c = row_pix[x]
-            a_cur = quantize_alpha(row_a[x])
+            a_val = row_a[x]
+            opaque = is_opaque_alpha(a_val)
 
-            run = 1
-            while (x + run < w and run < max_run and
-                   row_pix[x + run] == c and
-                   quantize_alpha(row_a[x + run]) == a_cur):
-                run += 1
-
-            if a_cur == 0:
-                out.append(run - 1)
-            elif a_cur == 3:
-                out.append(0x40 | (run - 1))
+            if opaque:
+                run = 1
+                while (x + run < w and run < max_run_opaque and
+                       row_pix[x + run] == c and
+                       is_opaque_alpha(row_a[x + run])):
+                    run += 1
+                out.append(0x80 | (run - 1))
                 out.append(c & 0xFF)
                 out.append((c >> 8) & 0xFF)
             else:
-                out.append((a_cur << 6) | (run - 1))
-                out.append(c & 0xFF)
-                out.append((c >> 8) & 0xFF)
+                tt = quantize_alpha_nonopaque(a_val)
+                run = 1
+                while (x + run < w and run < max_run_alpha and
+                       row_pix[x + run] == c and
+                       not is_opaque_alpha(row_a[x + run]) and
+                       quantize_alpha_nonopaque(row_a[x + run]) == tt):
+                    run += 1
+                if tt == 0:
+                    out.append(run - 1)
+                else:
+                    out.append((tt << 5) | (run - 1))
+                    out.append(c & 0xFF)
+                    out.append((c >> 8) & 0xFF)
             x += run
 
     return bytes(out)
@@ -300,7 +331,16 @@ def pack_pal8(path, with_alpha=False):
         rgb_data = [(r, g, b) for r, g, b, a in data]
         alpha_data = [a for r, g, b, a in data]
     else:
-        img = Image.open(path).convert("RGB")
+        img = Image.open(path)
+        if img.mode == 'RGBA':
+            # Composite against black to bake alpha into RGB values.
+            # Without this, semi-transparent edge pixels keep their full
+            # foreground colour after .convert("RGB") and produce hard
+            # aliased edges after opaque quantisation.
+            bg = Image.new('RGBA', img.size, (0, 0, 0, 255))
+            img = Image.alpha_composite(bg, img).convert("RGB")
+        else:
+            img = img.convert("RGB")
         w, h = img.size
         rgb_data = list(img.getdata())
         alpha_data = None
@@ -395,9 +435,9 @@ typedef enum ImageId {{
 enum ImageFormat {{
     FMT_A8_RLE          = 0,  // grayscale RLE, tint coloring, opaque
     FMT_PAL_RLE         = 1,  // palette RLE, RGB565 palette, opaque
-    FMT_PAL_ALPHA_RLE   = 2,  // palette RLE, RGB565 palette, alpha inline
+    FMT_PAL_ALPHA_RLE   = 2,  // palette RLE, RGB565 palette, alpha inline (variable-length head)
     FMT_RGB565_RLE      = 3,  // direct color RLE, opaque
-    FMT_RGB565A_RLE     = 4,  // direct color RLE, alpha inline
+    FMT_RGB565A_RLE     = 4,  // direct color RLE, alpha inline (variable-length head)
 }};
 
 // formatInfo byte: bits 2:0 = format enum, bits 7:3 = paletteBits
@@ -435,7 +475,9 @@ extern const uint8_t _binary_res_images_bin_end[];
 }}
 #endif
 
+#ifndef RES_IMAGE_BUNDLE
 #define RES_IMAGE_BUNDLE  _binary_res_images_bin_start
+#endif
 
 #ifdef __cplusplus
 static inline const ImageBundleHeader* resHeader() {{

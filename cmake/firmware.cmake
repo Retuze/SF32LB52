@@ -29,6 +29,7 @@ endfunction()
 
 # add_simulator(<target>)
 #   Sets up a host (Windows/Linux) executable for PC-based UI debugging.
+#   Console subsystem (not Windows GUI) — printf/FPS stats are visible.
 function(add_simulator _FW_TARGET)
     set_target_properties(${_FW_TARGET} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"

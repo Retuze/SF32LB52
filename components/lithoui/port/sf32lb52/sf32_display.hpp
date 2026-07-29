@@ -45,12 +45,16 @@ public:
 
     void waitReady() override { lcd_wait_idle(); }
     void waitTE()    override { lcd_te_wait(); }
-    void flush()     override { waitReady(); }
+    // flush() is intentionally a no-op — DMA drain happens naturally in
+    // the next frame's waitForFreeTile(), overlapping the last tile's DMA
+    // with the next frame's first tile draw.
+    void flush()     override {}
 
     int width()  const override { return mWidth; }
     int height() const override { return mHeight; }
 
     uint32_t transferCycles()    const override { return lcd_xfer_cycles(); }
+    uint32_t waitCycles()        const override { return lcd_wait_cycles(); }
     void     clearTransferCycles()     override  { lcd_clear_xfer_cycles(); mTransferCycles = 0; }
 
 private:

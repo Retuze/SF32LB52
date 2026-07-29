@@ -66,7 +66,7 @@
       "displayName": "Debug (configure + build)",
       "steps": [
         { "type": "configure", "name": "debug" },
-        { "type": "build", "name": "debug" }
+        { "type": "build",     "name": "debug" }
       ]
     },
     {
@@ -74,7 +74,15 @@
       "displayName": "Release (configure + build)",
       "steps": [
         { "type": "configure", "name": "release" },
-        { "type": "build", "name": "release" }
+        { "type": "build",     "name": "release" }
+      ]
+    },
+    {
+      "name": "simulator",
+      "displayName": "Simulator (configure + build)",
+      "steps": [
+        { "type": "configure", "name": "simulator" },
+        { "type": "build",     "name": "simulator" }
       ]
     }
   ]

@@ -1,8 +1,8 @@
-# project.cmake — PC Simulator (Windows/Linux, host clang)
+# project.cmake — PC Simulator (Windows GDI / Linux X11, host clang)
 #
 # This project does NOT use the embedded toolchain.
-# It links against host libraries (SDL2 for display, pthread, etc.)
-# for UI development and debugging without physical hardware.
+# It links against the LithoUI framework compiled for the host,
+# with platform-native windowing (X11 or GDI).
 #
 # Only active when SIMULATOR=ON is set in CMake cache.
 
@@ -11,5 +11,5 @@ if(NOT SIMULATOR)
 endif()
 
 set(PROJECT_LIBS
-    # No embedded libraries needed — simulator stubs out HAL/BSP
+    lithoui
 )

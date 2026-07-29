@@ -805,6 +805,8 @@ static HAL_StatusTypeDef EnableInf(LCDC_HandleTypeDef *lcdc)
     {
         ret = HAL_DSI_Start(&lcdc->hdsi);
     }
+#else
+    (void)lcdc;
 #endif /* HAL_DSI_MODULE_ENABLED */
 
     return ret;
@@ -1141,7 +1143,7 @@ static HAL_StatusTypeDef WaitBusy2(LCDC_HandleTypeDef *lcdc)
 static HAL_StatusTypeDef LayerUpdate(LCDC_HandleTypeDef *lcdc)
 {
     LCDC_LayerCfgTypeDef *cfg;
-    uint32_t bytes_per_pixel, data_w, data_h, roi_w, roi_h;
+    uint32_t bytes_per_pixel, data_w, data_h, roi_h;
     uint32_t reg, layer_1line_total_bytes;
 
     if (NULL == lcdc)
@@ -1153,7 +1155,6 @@ static HAL_StatusTypeDef LayerUpdate(LCDC_HandleTypeDef *lcdc)
 
 
     /*** 1. setup canvas info ***/
-    roi_w   = lcdc->roi.x1  - lcdc->roi.x0  + 1;
     roi_h   = lcdc->roi.y1  - lcdc->roi.y0  + 1;
     lcdc->Instance->CANVAS_BG = (lcdc->bg.r << LCD_IF_CANVAS_BG_RED_Pos) | (lcdc->bg.g << LCD_IF_CANVAS_BG_GREEN_Pos) | (lcdc->bg.b << LCD_IF_CANVAS_BG_BLUE_Pos);
 
@@ -1531,12 +1532,10 @@ static HAL_StatusTypeDef _SendLayerData(LCDC_HandleTypeDef *lcdc, LCDC_AsyncMode
     else if (HAL_LCDC_IS_JDI_PARALLEL_IF(lcdc->Init.lcd_itf))
     {
 
-        uint32_t max_col, max_line, start_line, end_line, start_col, end_col;
+        uint32_t max_line, start_line, end_line, start_col, end_col;
         JDI_LCD_CFG *jdi_cfg = &(lcdc->Init.cfg.jdi);
 
-        max_col = (jdi_cfg->bank_col_head + jdi_cfg->valid_columns + jdi_cfg->bank_col_tail) / 2;
         max_line = (jdi_cfg->bank_row_head + jdi_cfg->valid_rows + jdi_cfg->bank_row_tail) * 2;
-
 
         start_line = (jdi_cfg->bank_row_head + lcdc->roi.y0) * 2 + 1;
         end_line   = (jdi_cfg->bank_row_head + lcdc->roi.y1 + 1) * 2;

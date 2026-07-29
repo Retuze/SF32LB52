@@ -34,6 +34,7 @@ static void (*s_done)(void *ctx);
 static void *s_done_ctx;
 static uint32_t s_xfer_start;
 static uint32_t s_xfer_cycles;
+static uint32_t s_wait_cycles;   // accumulated time spinning in lcd_wait_idle()
 
 /* ── D-Cache maintenance ───────────────────────────────────────────────── */
 
@@ -193,8 +194,11 @@ void LCDC1_IRQHandler(void)
 
 void lcd_wait_idle(void)
 {
+    if (!s_busy) return;
+    uint32_t t0 = DWT_CYCCNT;
     while (s_busy) {
     }
+    s_wait_cycles += DWT_CYCCNT - t0;
 }
 
 int lcd_is_busy(void)
@@ -249,7 +253,13 @@ uint32_t lcd_xfer_cycles(void)
     return s_xfer_cycles;
 }
 
+uint32_t lcd_wait_cycles(void)
+{
+    return s_wait_cycles;
+}
+
 void lcd_clear_xfer_cycles(void)
 {
     s_xfer_cycles = 0;
+    s_wait_cycles = 0;
 }

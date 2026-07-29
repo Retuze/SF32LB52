@@ -9,5 +9,6 @@ Thumbs.db
 *.obj
 *.bin
 components/lithoui/generated/res_images.bin
+components/lithoui/dump/
 __pycache__/
 .claude/

@@ -15,13 +15,20 @@
 //
 // The `fmt` parameter carries formatInfo: bits 2:0 = format enum, bits 7:3 = paletteBits.
 // Use LITHO_FORMAT(fmt) and LITHO_PALETTE_BITS(fmt) macros from res_images.h.
+//
+// Alpha-format RLE head byte (formats 2 & 4) — variable-length encoding:
+//   bit7=1 (opaque, α=255):
+//     [1|LLLLLLL]  7-bit run length: (head & 0x7F) + 1 = 1..128 pixels
+//     Followed by color data (palette index or RGB565)
+//   bit7=0 (non-opaque):
+//     [0|TT|LLLLL]  TT=bits6:5 (alpha level), LLLLL=bits4:0 run length = (head & 0x1F) + 1 = 1..32
+//     TT=00 → α=0   (fully transparent, 1-byte record, no color data)
+//     TT=01 → α=85  (semi-transparent, head + color)
+//     TT=10 → α=170 (semi-transparent, head + color)
+//     TT=11 → α=213 (semi-transparent, head + color; NOT 255 — 255 uses bit7=1)
 
-// TT field (bits7:6 of alpha-format head byte) → actual alpha value
-//   TT=00 → alpha=0   (fully transparent, 1-byte record)
-//   TT=01 → alpha=255 (opaque, head + color data)
-//   TT=10 → alpha=85  (semi-transparent)
-//   TT=11 → alpha=170 (semi-transparent)
-static const uint8_t kTTAlpha[4] = {0, 255, 85, 170};
+// Alpha values for non-opaque TT field (indexed directly by TT = bits 6:5 of head).
+static const uint8_t kTTAlpha[4] = {0, 85, 170, 213};
 
 // ── Shared inline helpers ─────────────────────────────────────────
 
@@ -147,11 +154,9 @@ public:
     void drawImage(const void* src, int fmt,
                    int srcW, int srcH, int dx, int dy,
                    const RGB565* tint = nullptr) {
-        printf("[drawImage] fmt=%d w=%d h=%d\r\n", fmt, srcW, srcH);
 
         int imageFormat = LITHO_FORMAT(fmt);
         int paletteSize = LITHO_PALETTE_SIZE(fmt);
-        printf("[drawImage] imageFmt=%d palSize=%d\r\n", imageFormat, paletteSize);
 
         int sx0 = dx + mScreenX;
         int sy0 = dy + mScreenY;
@@ -180,8 +185,7 @@ public:
 
         // ── FMT_A8_RLE (0): grayscale + RLE ─────────────────────
         if (imageFormat == 0) {
-            printf("[drawImage] FMT_A8_RLE path\r\n");
-            const uint8_t* rle = (const uint8_t*)src;
+                        const uint8_t* rle = (const uint8_t*)src;
             const uint32_t* off = (const uint32_t*)rle;
             uint16_t* tile = mTile->buffer();
             int tStride = mTile->stride();
@@ -236,8 +240,7 @@ public:
 
         // ── FMT_PAL_RLE (1): palette + RLE, opaque ───────────────
         if (imageFormat == 1) {
-            printf("[drawImage] FMT_PAL_RLE path\r\n");
-            const uint16_t* pal = (const uint16_t*)src;
+                        const uint16_t* pal = (const uint16_t*)src;
             const uint8_t*  rle = (const uint8_t*)src + paletteSize * 2;
             const uint32_t* off = (const uint32_t*)rle;
             uint16_t* tile = mTile->buffer();
@@ -275,9 +278,8 @@ public:
             return;
         }
 
-        // ── FMT_PAL_ALPHA_RLE (2): palette + RLE, alpha inline ───
+        // ── FMT_PAL_ALPHA_RLE (2): palette + RLE, alpha inline (variable-length head) ───
         if (imageFormat == 2) {
-            printf("[drawImage] FMT_PAL_ALPHA_RLE path\r\n");
             const uint16_t* pal = (const uint16_t*)src;
             const uint8_t*  rle = (const uint8_t*)src + paletteSize * 2;
             const uint32_t* off = (const uint32_t*)rle;
@@ -295,24 +297,33 @@ public:
                         break;
                     }
                     uint8_t head = *p++;
-                    uint8_t tt   = head >> 6;
-                    int n = (head & 0x3F) + 1;  // run length 1..64
-                    int runR = px + n;
-                    if (tt == 0) {
-                        // Fully transparent: no color data, skip
-                    } else {
+                    if (head & 0x80) {
+                        // ── Opaque: α=255, 7-bit run length (1..128) ──
+                        int n = (head & 0x7F) + 1;
                         uint8_t ix = *p++;
+                        int runR = px + n;
                         int cl = px < visL ? visL : px;
                         int cr = runR > visR ? visR : runR;
                         if (cr > cl) {
-                            if (tt == 1) {
-                                // Opaque: word-fill
-                                uint16_t c  = pal[ix];
-                                uint16_t* dp = dstRow + (cl - visL); int cnt = cr - cl;
-                                wordFill32(dp, cnt, c);
-                            } else {
-                                // Semi-transparent: blend
-                                uint8_t a = kTTAlpha[tt];  // tt=2→85, tt=3→170
+                            uint16_t c  = pal[ix];
+                            uint16_t* dp = dstRow + (cl - visL); int cnt = cr - cl;
+                            wordFill32(dp, cnt, c);
+                        }
+                        px = runR;
+                    } else {
+                        // ── Non-opaque: TT + 5-bit run length (1..32) ──
+                        uint8_t tt = (head >> 5) & 0x03;
+                        int n = (head & 0x1F) + 1;
+                        int runR = px + n;
+                        if (tt == 0) {
+                            // Fully transparent: no color data, skip
+                        } else {
+                            uint8_t ix = *p++;
+                            int cl = px < visL ? visL : px;
+                            int cr = runR > visR ? visR : runR;
+                            if (cr > cl) {
+                                // tt=1→85, tt=2→170, tt=3→213
+                                uint8_t a = kTTAlpha[tt];
                                 while (cl < cr) {
                                     uint32_t combined = (uint32_t)a * mAlpha / 255;
                                     if (combined > 0) {
@@ -322,8 +333,8 @@ public:
                                 }
                             }
                         }
+                        px = runR;
                     }
-                    px = runR;
                 }
             }
             return;
@@ -392,7 +403,7 @@ public:
             return;
         }
 
-        // ── FMT_RGB565A_RLE (4): direct color RLE, alpha inline ──
+        // ── FMT_RGB565A_RLE (4): direct color RLE, alpha inline (variable-length head) ──
         if (imageFormat == 4) {
             const uint8_t* rle = (const uint8_t*)src;
             const uint32_t* off = (const uint32_t*)rle;
@@ -405,28 +416,37 @@ public:
                 int px = 0;
                 while (px < srcW) {
                     uint8_t head = *p++;
-                    uint8_t tt   = head >> 6;
-                    int n = (head & 0x3F) + 1;  // run length 1..64
-                    int runR = px + n;
-                    if (tt == 0) {
-                        // Fully transparent: no color data, skip
-                    } else {
+                    if (head & 0x80) {
+                        // ── Opaque: α=255, 7-bit run length (1..128) ──
+                        int n = (head & 0x7F) + 1;
                         uint16_t c = *(const uint16_t*)p; p += 2;
+                        int runR = px + n;
                         int cl = px < visL ? visL : px;
                         int cr = runR > visR ? visR : runR;
                         if (cr > cl) {
-                            if (tt == 1) {
-                                // Opaque
-                                if (mAlpha == 255) {
-                                    uint16_t* dp = dstRow + (cl - visL);
-                                    int cnt = cr - cl;
-                                    wordFill32(dp, cnt, c);
-                                } else {
-                                    for (int i = 0; i < cr - cl; i++)
-                                        dstRow[(cl - visL) + i] = blend565(c, dstRow[(cl - visL) + i], mAlpha);
-                                }
+                            if (mAlpha == 255) {
+                                uint16_t* dp = dstRow + (cl - visL);
+                                int cnt = cr - cl;
+                                wordFill32(dp, cnt, c);
                             } else {
-                                // Semi-transparent (tt=2→85, tt=3→170)
+                                for (int i = 0; i < cr - cl; i++)
+                                    dstRow[(cl - visL) + i] = blend565(c, dstRow[(cl - visL) + i], mAlpha);
+                            }
+                        }
+                        px = runR;
+                    } else {
+                        // ── Non-opaque: TT + 5-bit run length (1..32) ──
+                        uint8_t tt = (head >> 5) & 0x03;
+                        int n = (head & 0x1F) + 1;
+                        int runR = px + n;
+                        if (tt == 0) {
+                            // Fully transparent: no color data, skip
+                        } else {
+                            uint16_t c = *(const uint16_t*)p; p += 2;
+                            int cl = px < visL ? visL : px;
+                            int cr = runR > visR ? visR : runR;
+                            if (cr > cl) {
+                                // tt=1→85, tt=2→170, tt=3→213
                                 uint8_t a = kTTAlpha[tt];
                                 while (cl < cr) {
                                     uint32_t combined = (uint32_t)a * mAlpha / 255;
@@ -437,8 +457,8 @@ public:
                                 }
                             }
                         }
+                        px = runR;
                     }
-                    px = runR;
                 }
             }
             return;
@@ -552,63 +572,111 @@ public:
                     uint16_t s;
                     uint32_t pixelA = 255;
 
-                    // FMT_A8_RLE (0), FMT_PAL_RLE (1), FMT_PAL_ALPHA_RLE (2): head-byte RLE or raw row
-                    if (imageFormat == 0 || imageFormat == 1 || imageFormat == 2) {
-                        const uint8_t* rle;
-                        const uint16_t* pal = nullptr;
-                        if (imageFormat == 0) {
-                            rle = (const uint8_t*)src;
-                        } else {
-                            pal = (const uint16_t*)src;
-                            rle = (const uint8_t*)src + palBytes;
-                        }
+                    // ── FMT_A8_RLE (0): [gray][8bit-len] RLE or raw row ──
+                    if (imageFormat == 0) {
+                        const uint8_t* rle = (const uint8_t*)src;
                         const uint32_t* off = (const uint32_t*)rle;
                         uint32_t rowOff = off[sy];
                         if (rowOff & 0x80000000) {
-                            // Raw row: 1B/px palette index or grayscale
-                            uint8_t v = (rle + (rowOff & 0x7FFFFFFF))[sx];
-                            if (imageFormat == 0) {
-                                uint8_t g = v;
-                                if (tint) {
-                                    uint32_t tr = (tint->value >> 11) & 0x1F, tg = (tint->value >> 5) & 0x3F, tb = tint->value & 0x1F;
-                                    uint32_t r = (tr * g) / 255, gg = (tg * g) / 255, b = (tb * g) / 255;
-                                    if (r > 0x1F) r = 0x1F; if (gg > 0x3F) gg = 0x3F; if (b > 0x1F) b = 0x1F;
-                                    s = (uint16_t)((r << 11) | (gg << 5) | b);
-                                } else { uint32_t g5 = (g >> 3) & 0x1F, g6 = (g >> 2) & 0x3F; s = (uint16_t)((g5 << 11) | (g6 << 5) | g5); }
+                            // Raw grayscale row: 1B/px
+                            uint8_t g = (rle + (rowOff & 0x7FFFFFFF))[sx];
+                            if (tint) {
+                                uint32_t tr = (tint->value >> 11) & 0x1F, tg = (tint->value >> 5) & 0x3F, tb = tint->value & 0x1F;
+                                uint32_t r = (tr * g) / 255, gg = (tg * g) / 255, b = (tb * g) / 255;
+                                if (r > 0x1F) r = 0x1F; if (gg > 0x3F) gg = 0x3F; if (b > 0x1F) b = 0x1F;
+                                s = (uint16_t)((r << 11) | (gg << 5) | b);
                             } else {
-                                s = pal[v];
+                                uint32_t g5 = (g >> 3) & 0x1F, g6 = (g >> 2) & 0x3F;
+                                s = (uint16_t)((g5 << 11) | (g6 << 5) | g5);
                             }
                         } else {
                             const uint8_t* p = rle + rowOff;
                             int px = 0;
-                        while (px <= sx) {
-                            uint8_t head = *p++;
-                            uint8_t tt   = head >> 6;
-                            int n = (head & 0x1F) + 1;  // 1..32
-                            uint8_t alpha = 255;
-                            uint8_t val = 0;
-                            if (tt != 0) {
-                                val = *p++;
-                                alpha = kTTAlpha[tt];
-                            }
-                            if (px + n > sx) {
-                                if (imageFormat == 0) {
-                                    uint8_t g = val;
+                            while (px <= sx) {
+                                uint8_t g = *p++;
+                                uint8_t len = *p++;
+                                int n = (int)len + 1;  // 1..256
+                                if (px + n > sx) {
                                     if (tint) {
                                         uint32_t tr = (tint->value >> 11) & 0x1F, tg = (tint->value >> 5) & 0x3F, tb = tint->value & 0x1F;
                                         uint32_t r = (tr * g) / 255, gg = (tg * g) / 255, b = (tb * g) / 255;
                                         if (r > 0x1F) r = 0x1F; if (gg > 0x3F) gg = 0x3F; if (b > 0x1F) b = 0x1F;
                                         s = (uint16_t)((r << 11) | (gg << 5) | b);
-                                    } else { uint32_t g5 = (g >> 3) & 0x1F, g6 = (g >> 2) & 0x3F; s = (uint16_t)((g5 << 11) | (g6 << 5) | g5); }
-                                } else {
-                                    s = pal[val];
+                                    } else {
+                                        uint32_t g5 = (g >> 3) & 0x1F, g6 = (g >> 2) & 0x3F;
+                                        s = (uint16_t)((g5 << 11) | (g6 << 5) | g5);
+                                    }
+                                    pixelA = 255;
+                                    break;
                                 }
-                                pixelA = alpha;
-                                break;
+                                px += n;
                             }
-                            px += n;
                         }
-                        } // end if raw/RLE
+                    // ── FMT_PAL_RLE (1): [idx][8bit-len] RLE or raw row ──
+                    } else if (imageFormat == 1) {
+                        const uint16_t* pal = (const uint16_t*)src;
+                        const uint8_t*  rle = (const uint8_t*)src + palBytes;
+                        const uint32_t* off = (const uint32_t*)rle;
+                        uint32_t rowOff = off[sy];
+                        if (rowOff & 0x80000000) {
+                            // Raw palette index row: 1B/px
+                            s = pal[(rle + (rowOff & 0x7FFFFFFF))[sx]];
+                        } else {
+                            const uint8_t* p = rle + rowOff;
+                            int px = 0;
+                            while (px <= sx) {
+                                uint8_t ix = *p++;
+                                uint8_t len = *p++;
+                                int n = (int)len + 1;  // 1..256
+                                if (px + n > sx) {
+                                    s = pal[ix];
+                                    pixelA = 255;
+                                    break;
+                                }
+                                px += n;
+                            }
+                        }
+                    // ── FMT_PAL_ALPHA_RLE (2): variable-length head byte ──
+                    } else if (imageFormat == 2) {
+                        const uint16_t* pal = (const uint16_t*)src;
+                        const uint8_t*  rle = (const uint8_t*)src + palBytes;
+                        const uint32_t* off = (const uint32_t*)rle;
+                        const uint8_t* p = rle + off[sy];  // no raw fallback for alpha
+                        int px = 0;
+                        while (px <= sx) {
+                            uint8_t head = *p++;
+                            if (head & 0x80) {
+                                // Opaque: α=255, 7-bit run length (1..128)
+                                int n = (head & 0x7F) + 1;
+                                uint8_t val = *p++;
+                                if (px + n > sx) {
+                                    s = pal[val];
+                                    pixelA = 255;
+                                    break;
+                                }
+                                px += n;
+                            } else {
+                                // Non-opaque: TT + 5-bit run length (1..32)
+                                uint8_t tt = (head >> 5) & 0x03;
+                                int n = (head & 0x1F) + 1;
+                                if (tt == 0) {
+                                    // Fully transparent
+                                    if (px + n > sx) {
+                                        s = 0;
+                                        pixelA = 0;
+                                        break;
+                                    }
+                                } else {
+                                    uint8_t val = *p++;
+                                    if (px + n > sx) {
+                                        s = pal[val];
+                                        pixelA = kTTAlpha[tt];  // tt=1→85, tt=2→170, tt=3→213
+                                        break;
+                                    }
+                                }
+                                px += n;
+                            }
+                        }
                     // FMT_RGB565_RLE (3): run/literal command encoding or raw row
                     } else if (imageFormat == 3) {
                         const uint8_t* rle = (const uint8_t*)src;
@@ -635,27 +703,45 @@ public:
                             px += n;
                         }
                         } // end if raw/RLE
-                    // FMT_RGB565A_RLE (4): head-byte + optional color
+                    // FMT_RGB565A_RLE (4): variable-length head byte
                     } else if (imageFormat == 4) {
                         const uint8_t* rle = (const uint8_t*)src;
                         const uint32_t* off = (const uint32_t*)rle;
-                        const uint8_t* p = rle + off[sy];
+                        const uint8_t* p = rle + off[sy];  // no raw fallback for alpha
                         int px = 0;
                         while (px <= sx) {
                             uint8_t head = *p++;
-                            uint8_t tt   = head >> 6;
-                            int n = (head & 0x1F) + 1;  // 1..32
-                            uint8_t alpha = kTTAlpha[tt];
-                            uint16_t c = 0;
-                            if (tt != 0) {
-                                c = *(const uint16_t*)p; p += 2;
+                            if (head & 0x80) {
+                                // Opaque: α=255, 7-bit run length (1..128)
+                                int n = (head & 0x7F) + 1;
+                                uint16_t c = *(const uint16_t*)p; p += 2;
+                                if (px + n > sx) {
+                                    s = c;
+                                    pixelA = 255;
+                                    break;
+                                }
+                                px += n;
+                            } else {
+                                // Non-opaque: TT + 5-bit run length (1..32)
+                                uint8_t tt = (head >> 5) & 0x03;
+                                int n = (head & 0x1F) + 1;
+                                if (tt == 0) {
+                                    // Fully transparent, no color data
+                                    if (px + n > sx) {
+                                        s = 0;
+                                        pixelA = 0;
+                                        break;
+                                    }
+                                } else {
+                                    uint16_t c = *(const uint16_t*)p; p += 2;
+                                    if (px + n > sx) {
+                                        s = c;
+                                        pixelA = kTTAlpha[tt];  // tt=1→85, tt=2→170, tt=3→213
+                                        break;
+                                    }
+                                }
+                                px += n;
                             }
-                            if (px + n > sx) {
-                                s = c;
-                                pixelA = alpha;
-                                break;
-                            }
-                            px += n;
                         }
                     } else {
                         s = 0;

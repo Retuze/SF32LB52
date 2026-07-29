@@ -143,7 +143,7 @@ struct MPU_Regs {
  * attributes (MPU + caches) — executing from Flash while changing how Flash
  * is accessed causes an IACCVIOL fault.
  */
-static RAMFUNC __attribute__((noinline))
+static RAMFUNC __attribute__((noinline, unused))
 void enable_flash_cache_prefetch(void)
 {
     uint32_t i;
