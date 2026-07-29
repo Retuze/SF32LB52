@@ -5,25 +5,58 @@ namespace litho {
 
 /* ScrollView — ViewGroup that scrolls its own children vertically.  Like
  * Android's ScrollView: children are added directly via addView(), and the
- * scroll offset is applied in onDraw().  Touch interception is self-contained
- * — DOWN captures the target, MOVE adjusts the scroll, UP releases. */
+ * scroll offset is applied in onDraw().
+ *
+ * Touch: try children first (with scroll offset). If none handle DOWN, capture
+ * the gesture for scrolling. Do not claim sibling hits — callers should size
+ * this view so it does not cover other controls. */
 class ScrollView : public ViewGroup {
 public:
     bool dispatchTouchEvent(TouchEvent& ev, int sx, int sy) override {
         if (ev.action == TouchAction::DOWN) {
             mLastY = ev.y;
+            mTracking = false;
+
+            // Children first (topmost), hit-test with current scroll offset.
+            for (int i = (int)childCount() - 1; i >= 0; i--) {
+                View* child = childAt((uint16_t)i);
+                if (!child || !child->visible()) continue;
+
+                Region tb = child->transformedBounds();
+                int cx = sx + tb.x;
+                int cy = sy + tb.y + mScroll;
+
+                if (ev.x >= cx && ev.x < cx + tb.width &&
+                    ev.y >= cy && ev.y < cy + tb.height) {
+                    if (child->dispatchTouchEvent(ev, cx, cy)) {
+                        if (!ev.handler) {
+                            ev.handler   = child;
+                            ev.handlerSX = cx;
+                            ev.handlerSY = cy;
+                        }
+                        return true;
+                    }
+                }
+            }
+
+            // Empty area → scroll gesture
             mTracking = true;
             ev.handler   = this;
             ev.handlerSX = sx;
             ev.handlerSY = sy;
             return true;
         }
+
         if (ev.action == TouchAction::MOVE && mTracking) {
             int dy = ev.y - mLastY;
-            mLastY  = ev.y;
-            mScroll += dy;
+            mLastY = ev.y;
+            if (dy != 0) {
+                mScroll += dy;
+                invalidate();
+            }
             return true;
         }
+
         if (ev.action == TouchAction::UP) {
             mTracking = false;
             return true;
@@ -66,9 +99,12 @@ public:
         }
     }
 
+    int  scrollY() const { return mScroll; }
+    void setScrollY(int y) { mScroll = y; invalidate(); }
+
 private:
-    int mLastY  = 0;
-    int mScroll = 0;
+    int  mLastY    = 0;
+    int  mScroll   = 0;
     bool mTracking = false;
 };
 

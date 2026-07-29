@@ -10,5 +10,6 @@ Thumbs.db
 *.bin
 components/lithoui/generated/res_images.bin
 components/lithoui/dump/
+components/lithoui/ui/*/fonts/fontpath.txt
 __pycache__/
 .claude/

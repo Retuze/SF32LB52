@@ -10,10 +10,13 @@ Directory layout:
       solid/                opaque color -> FMT_PAL_RLE or FMT_RGB565_RLE
       alpha/                color + alpha -> FMT_PAL_ALPHA_RLE or FMT_RGB565A_RLE
                             (files starting with r_ get R_ prefix → triggers sin table)
+      fonts/                optional charset-driven font section
+        charset.txt         unicode list / ranges
+        fontpath.txt        path to TTF/OTF (not committed)
 
 Outputs:
-    res_images.bin    binary bundle
-    res_images.h      ImageId enum, ImageEntry, inline accessors
+    res_images.bin    binary bundle (images + optional LFNT font section + sin)
+    res_images.h      ImageId enum, ImageEntry, font accessors
 """
 
 import os, struct, sys, math
@@ -25,6 +28,11 @@ except ImportError:
     print("ERROR: Pillow not installed. Run: pip install Pillow")
     sys.exit(1)
 
+# Allow importing tools/font_convert/font_convert.py
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT / "tools" / "font_convert") not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT / "tools" / "font_convert"))
+
 # ── globals (set in main) ──
 
 GEN_DIR    = None
@@ -33,9 +41,14 @@ BUNDLE_NAME = None
 # ── constants ──
 
 MAGIC       = b"LIMB"
-VERSION     = 0x00010000
+VERSION     = 0x00020000
 ENTRY_SIZE  = 16
-HEADER_SIZE = 16
+HEADER_SIZE = 20  # + fontsOffset (u32)
+
+FONT_MAGIC        = b"LFNT"
+FONT_SECTION_HDR  = 16
+GLYPH_ENTRY_SIZE  = 24
+DEFAULT_FONT_SIZE = 32
 
 # Format enum — 5 formats (all RLE)
 FMT_A8_RLE           = 0  # grayscale RLE, tint coloring, opaque
@@ -59,7 +72,8 @@ def make_format_info(fmt, palette_bits):
 NONOPAQUE_ALPHA_LEVELS = [0, 85, 170, 213]
 OPAQUE_THRESHOLD = 234  # α >= this → bit7=1 (fully opaque, 7-bit run length)
 
-FLAG_HAS_SIN  = 0x0001
+FLAG_HAS_SIN   = 0x0001
+FLAG_HAS_FONTS = 0x0002
 
 # Directory prefixes
 PRE_OPAQUE = ""
@@ -379,12 +393,119 @@ def generate_sin_table():
     return [int(round(math.sin(math.radians(d)) * 32767)) for d in range(360)]
 
 
+# ── font packing ──
+
+def build_font_section(fonts_dir: Path):
+    """Render + encode font section. Returns dict or None."""
+    charset_path = fonts_dir / "charset.txt"
+    if not charset_path.exists():
+        return None
+
+    from font_convert import parse_charset, render_glyphs, resolve_font_path
+
+    font_path = resolve_font_path(fonts_dir)
+    if font_path is None or not font_path.exists():
+        print("ERROR: fonts/ present but font TTF not found.")
+        print(f"  Set a path in {fonts_dir / 'fontpath.txt'}")
+        sys.exit(1)
+
+    cps = parse_charset(charset_path)
+    if not cps:
+        print("WARNING: charset.txt empty — skipping font section")
+        return None
+
+    print(f"\n  [fonts/]  {len(cps)} codepoints  size={DEFAULT_FONT_SIZE}px")
+    print(f"    font: {font_path}")
+    info = render_glyphs(font_path, DEFAULT_FONT_SIZE, cps)
+    print(f"    ascent={info['ascent']} descent={info['descent']} "
+          f"lineHeight={info['lineHeight']} missing={info['missing']}")
+
+    glyphs_out = []
+    total_rle = 0
+    for g in info["glyphs"]:
+        w, h = g["width"], g["height"]
+        if w > 0 and h > 0 and g["gray"] is not None:
+            chunk = encode_rle(g["gray"], w, h)
+        else:
+            chunk = b""
+        total_rle += len(chunk)
+        glyphs_out.append({
+            "codepoint": g["codepoint"],
+            "width": w,
+            "height": h,
+            "bearingX": g["bearingX"],
+            "bearingY": g["bearingY"],
+            "advance": g["advance"],
+            "formatInfo": make_format_info(FMT_A8_RLE, 0),
+            "chunk": chunk,
+            "offset": 0,
+            "size": 0,
+        })
+
+    print(f"    glyphs RLE total: {total_rle} bytes")
+    return {
+        "pixelSize": info["pixelSize"],
+        "ascent": info["ascent"],
+        "descent": info["descent"],
+        "lineHeight": info["lineHeight"],
+        "glyphs": glyphs_out,
+    }
+
+
+def serialize_font_section(font_info, fonts_offset: int) -> bytes:
+    """Serialize Font section; assign absolute glyph chunk offsets."""
+    glyphs = font_info["glyphs"]
+    n = len(glyphs)
+    table_bytes = FONT_SECTION_HDR + n * GLYPH_ENTRY_SIZE
+    off = fonts_offset + table_bytes
+    for g in glyphs:
+        g["offset"] = off
+        g["size"] = len(g["chunk"])
+        off += len(g["chunk"])
+
+    out = bytearray()
+    out += FONT_MAGIC
+    out += struct.pack("<H", font_info["pixelSize"] & 0xFFFF)
+    out += struct.pack("<h", int(font_info["ascent"]))
+    out += struct.pack("<h", int(font_info["descent"]))
+    out += struct.pack("<H", font_info["lineHeight"] & 0xFFFF)
+    out += struct.pack("<H", n & 0xFFFF)
+    out += struct.pack("<H", 0)
+
+    for g in glyphs:
+        # GlyphEntry 24B
+        out += struct.pack(
+            "<IHHhhHBBII",
+            g["codepoint"] & 0xFFFFFFFF,
+            g["width"] & 0xFFFF,
+            g["height"] & 0xFFFF,
+            int(g["bearingX"]),
+            int(g["bearingY"]),
+            g["advance"] & 0xFFFF,
+            g["formatInfo"] & 0xFF,
+            0,
+            g["offset"] & 0xFFFFFFFF,
+            g["size"] & 0xFFFFFFFF,
+        )
+
+    for g in glyphs:
+        out += g["chunk"]
+
+    assert len(out) == (off - fonts_offset)
+    return bytes(out)
+
+
 # ── binary writer ──
 
-def write_bin(path, entries, data_chunks, sin_table):
-    """Write res_images.bin."""
+def write_bin(path, entries, sin_table, font_info=None):
+    """Write res_images.bin (images → fonts → sin)."""
     has_sin = sin_table is not None
-    flags = FLAG_HAS_SIN if has_sin else 0
+    has_fonts = font_info is not None and len(font_info["glyphs"]) > 0
+    flags = 0
+    if has_sin:
+        flags |= FLAG_HAS_SIN
+    if has_fonts:
+        flags |= FLAG_HAS_FONTS
 
     off = HEADER_SIZE + len(entries) * ENTRY_SIZE
     for e in entries:
@@ -392,28 +513,36 @@ def write_bin(path, entries, data_chunks, sin_table):
         e["size"] = len(e["chunk"])
         off += len(e["chunk"])
 
+    fonts_offset = 0
+    font_blob = b""
+    if has_fonts:
+        fonts_offset = off
+        font_blob = serialize_font_section(font_info, fonts_offset)
+        off += len(font_blob)
+
     sin_offset = off if has_sin else 0
 
     with open(path, "wb") as f:
-        # Header
+        # Header (20 bytes)
         f.write(MAGIC)
         f.write(struct.pack("<I", VERSION))
         f.write(struct.pack("<H", len(entries)))
         f.write(struct.pack("<H", flags))
         f.write(struct.pack("<I", sin_offset))
+        f.write(struct.pack("<I", fonts_offset))
 
-        # Entries
         for e in entries:
             f.write(struct.pack("<HHHBBII",
                      e["id"], e["width"], e["height"],
-                     e["formatInfo"], 0,  # reserved byte
+                     e["formatInfo"], 0,
                      e["offset"], e["size"]))
 
-        # Pixel data
         for e in entries:
             f.write(e["chunk"])
 
-        # Sin table
+        if font_blob:
+            f.write(font_blob)
+
         if has_sin:
             f.write(struct.pack(f"<{360}h", *sin_table))
 
@@ -426,6 +555,9 @@ RES_H_TEMPLATE = """// Auto-generated by pack_res.py — DO NOT EDIT
 
 #define RES_BUNDLE_NAME    "{bundle_name}"
 #define RES_BUNDLE_VERSION 0x{version:08X}
+
+#define RES_FLAG_HAS_SIN   0x0001
+#define RES_FLAG_HAS_FONTS 0x0002
 
 typedef enum ImageId {{
 {enum_entries}
@@ -463,7 +595,31 @@ typedef struct ImageBundleHeader {{
     uint16_t count;
     uint16_t flags;
     uint32_t sinOffset;
+    uint32_t fontsOffset;  // 0 if no font section
 }} ImageBundleHeader;
+
+typedef struct FontSectionHeader {{
+    uint8_t  magic[4];     // "LFNT"
+    uint16_t pixelSize;
+    int16_t  ascent;
+    int16_t  descent;
+    uint16_t lineHeight;
+    uint16_t glyphCount;
+    uint16_t reserved;
+}} FontSectionHeader;
+
+typedef struct GlyphEntry {{
+    uint32_t codepoint;
+    uint16_t width;        // actual cropped bitmap width
+    uint16_t height;       // actual cropped bitmap height
+    int16_t  bearingX;
+    int16_t  bearingY;
+    uint16_t advance;
+    uint8_t  formatInfo;   // FMT_A8_RLE
+    uint8_t  pad;
+    uint32_t offset;       // absolute in bundle
+    uint32_t size;
+}} GlyphEntry;
 #pragma pack(pop)
 
 #ifdef __cplusplus
@@ -484,7 +640,7 @@ static inline const ImageBundleHeader* resHeader() {{
     return (const ImageBundleHeader*)RES_IMAGE_BUNDLE;
 }}
 static inline const ImageEntry* imageEntry(ImageId id) {{
-    return &((const ImageEntry*)(RES_IMAGE_BUNDLE + 16))[id];
+    return &((const ImageEntry*)(RES_IMAGE_BUNDLE + sizeof(ImageBundleHeader)))[id];
 }}
 static inline const void* imagePixels(ImageId id) {{
     return (const void*)(RES_IMAGE_BUNDLE + imageEntry(id)->offset);
@@ -499,6 +655,41 @@ static inline const uint16_t* imagePalette(ImageId id) {{
 // (skips the variable-size palette).
 static inline uint32_t imageRleOffset(ImageId id) {{
     return (uint32_t)LITHO_PALETTE_SIZE(imageEntry(id)->formatInfo) * 2;
+}}
+
+static inline const FontSectionHeader* fontSection() {{
+    uint32_t off = resHeader()->fontsOffset;
+    if (!off || !(resHeader()->flags & RES_FLAG_HAS_FONTS)) return nullptr;
+    return (const FontSectionHeader*)(RES_IMAGE_BUNDLE + off);
+}}
+static inline uint16_t fontGlyphCount() {{
+    const FontSectionHeader* fh = fontSection();
+    return fh ? fh->glyphCount : 0;
+}}
+static inline const GlyphEntry* fontGlyphAt(uint16_t index) {{
+    const FontSectionHeader* fh = fontSection();
+    if (!fh || index >= fh->glyphCount) return nullptr;
+    return &((const GlyphEntry*)(RES_IMAGE_BUNDLE + resHeader()->fontsOffset
+                                 + sizeof(FontSectionHeader)))[index];
+}}
+// Binary search: glyphs are packed in ascending unicode order.
+static inline const GlyphEntry* fontFindGlyph(uint32_t codepoint) {{
+    const FontSectionHeader* fh = fontSection();
+    if (!fh || fh->glyphCount == 0) return nullptr;
+    const GlyphEntry* tab = (const GlyphEntry*)(
+        RES_IMAGE_BUNDLE + resHeader()->fontsOffset + sizeof(FontSectionHeader));
+    int lo = 0, hi = (int)fh->glyphCount - 1;
+    while (lo <= hi) {{
+        int mid = (lo + hi) >> 1;
+        uint32_t cp = tab[mid].codepoint;
+        if (cp == codepoint) return &tab[mid];
+        if (cp < codepoint) lo = mid + 1;
+        else hi = mid - 1;
+    }}
+    return nullptr;
+}}
+static inline const void* glyphPixels(const GlyphEntry* g) {{
+    return g ? (const void*)(RES_IMAGE_BUNDLE + g->offset) : nullptr;
 }}
 {sin_accessor}
 #endif
@@ -548,7 +739,7 @@ def write_headers(gen_dir, bundle_name, version, entries, sin_table):
         )
 
     h_path = gen_dir / "res_images.h"
-    with open(h_path, "w") as f:
+    with open(h_path, "w", encoding="utf-8", newline="\n") as f:
         f.write(RES_H_TEMPLATE.format(
             bundle_name=bundle_name,
             version=version,
@@ -679,18 +870,22 @@ def main():
     if sin_table:
         print(f"\n  Sin table: 360 entries, {360*2} bytes (rotatable images: {rot_count})")
 
+    # Optional charset-driven font section
+    font_info = None
+    fonts_dir = ui_dir / "fonts"
+    if fonts_dir.is_dir():
+        font_info = build_font_section(fonts_dir)
+
     # Write outputs
     bin_path = GEN_DIR / "res_images.bin"
-    write_bin(bin_path, all_entries, [e["chunk"] for e in all_entries], sin_table)
+    write_bin(bin_path, all_entries, sin_table, font_info)
     bin_size = os.path.getsize(bin_path)
-    print(f"\n  Bundle: {bin_path.name} ({bin_size} bytes, {len(all_entries)} images)")
+    ng = len(font_info["glyphs"]) if font_info else 0
+    print(f"\n  Bundle: {bin_path.name} ({bin_size} bytes, "
+          f"{len(all_entries)} images, {ng} glyphs)")
 
     write_headers(GEN_DIR, bundle_name, version, all_entries, sin_table)
-    print(f"  Headers: res_images.h", end="")
-    if sin_table:
-        print(f" + sin_table.h")
-    else:
-        print()
+    print(f"  Headers: res_images.h")
 
 
 if __name__ == "__main__":

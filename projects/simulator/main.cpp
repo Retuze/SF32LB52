@@ -27,6 +27,8 @@
 #include "framework/activity/activity_manager.hpp"
 #include "framework/intent/intent.hpp"
 #include "framework/widget/image.hpp"
+#include "framework/widget/text.hpp"
+#include "framework/widget/button.hpp"
 #include "framework/widget/scroll.hpp"
 #include "res_images.h"
 
@@ -71,15 +73,44 @@ public:
         // Background (renders first) — makes alpha transparency visible
         root->addView(new ColorBg(RGB565::fromRGB(40, 40, 80)));
 
-        // ScrollView — holds gallery icons, scrollable via mouse drag.
+        auto* title = new TextView("Hello 你好");
+        title->setTextColor(RGB565::fromRGB(255, 220, 80));
+        title->bounds().x = 16;
+        title->bounds().y = 8;
+        root->addView(title);
+
+        auto* btn = new Button(RGB565::fromRGB(60, 120, 200), 100, 40);
+        btn->setText("设置");
+        btn->setTextColor(RGB565::White());
+        btn->bounds().x = 270;
+        btn->bounds().y = 6;
+        btn->setOnClick([](void*) {
+            printf("[btn] 设置 clicked\n");
+        }, nullptr);
+        root->addView(btn);
+
+        auto* btnImg = new Button();
+        btnImg->setBackgroundImage(IMG_A_MUSIC);
+        btnImg->setText("音乐");
+        btnImg->setTextColor(RGB565::White());
+        btnImg->bounds().x = 16;
+        btnImg->bounds().y = 48;
+        btnImg->setOnClick([](void*) {
+            printf("[btn] 音乐 clicked\n");
+        }, nullptr);
+        root->addView(btnImg);
+
+        // ScrollView below header — fullscreen scroll would steal button hits.
+        static constexpr int kScrollTop = 160;
         auto* scroll = new ScrollView();
-        scroll->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        scroll->bounds() = {0, (int16_t)kScrollTop,
+                            (int16_t)kScreenW, (int16_t)(kScreenH - kScrollTop)};
         root->addView(scroll);
 
         // Gallery: 12 icons, rows 1+4 are alpha (PAL_ALPHA_RLE), rows 2+3 opaque
         static constexpr int kCols  = 3, kIconW = 100, kIconH = 100;
         static constexpr int kGapX  = (kScreenW - kCols * kIconW) / (kCols + 1);
-        static constexpr int kGapY  = 15, kStartY = 40;
+        static constexpr int kGapY  = 15, kStartY = 10;
 
         ImageId icons[] = {
             IMG_A_DIAL,     IMG_A_MESSAGES, IMG_A_MUSIC,

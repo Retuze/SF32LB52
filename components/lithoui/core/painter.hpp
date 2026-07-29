@@ -30,6 +30,13 @@
 // Alpha values for non-opaque TT field (indexed directly by TT = bits 6:5 of head).
 static const uint8_t kTTAlpha[4] = {0, 85, 170, 213};
 
+static inline size_t lithoStrlen(const char* s) {
+    size_t n = 0;
+    if (!s) return 0;
+    while (s[n]) ++n;
+    return n;
+}
+
 // ── Shared inline helpers ─────────────────────────────────────────
 
 // Alpha-blend a source RGB565 pixel onto a destination pixel.
@@ -853,6 +860,187 @@ public:
                 }
             }
         }
+        }
+
+    // ── drawText (UTF-8, charset font from LIMB) ─────────────────
+    // (x, y) is the top-left of the text box; baseline = y + font ascent.
+    // A8 glyph coverage is blended onto the tile (not opaque tint write).
+
+    static int utf8Decode(const char*& p, const char* end) {
+        if (p >= end) return -1;
+        unsigned char c = (unsigned char)*p++;
+        if (c < 0x80) return (int)c;
+        if ((c & 0xE0) == 0xC0) {
+            if (p >= end) return -1;
+            unsigned char c1 = (unsigned char)*p++;
+            if ((c1 & 0xC0) != 0x80) return -1;
+            return ((c & 0x1F) << 6) | (c1 & 0x3F);
+        }
+        if ((c & 0xF0) == 0xE0) {
+            if (p + 1 >= end) return -1;
+            unsigned char c1 = (unsigned char)*p++;
+            unsigned char c2 = (unsigned char)*p++;
+            if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80) return -1;
+            return ((c & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F);
+        }
+        if ((c & 0xF8) == 0xF0) {
+            if (p + 2 >= end) return -1;
+            unsigned char c1 = (unsigned char)*p++;
+            unsigned char c2 = (unsigned char)*p++;
+            unsigned char c3 = (unsigned char)*p++;
+            if ((c1 & 0xC0) != 0x80 || (c2 & 0xC0) != 0x80 || (c3 & 0xC0) != 0x80)
+                return -1;
+            return ((c & 0x07) << 18) | ((c1 & 0x3F) << 12) |
+                   ((c2 & 0x3F) << 6) | (c3 & 0x3F);
+        }
+        return -1; // invalid / skipped
+    }
+
+    __attribute__((noinline, section(".ramfunc")))
+    void drawGlyphA8Blend(const void* src, int srcW, int srcH,
+                          int dx, int dy, RGB565 color) {
+        if (!mTile || !mTile->buffer() || srcW <= 0 || srcH <= 0 || !src) return;
+
+        int sx0 = dx + mScreenX;
+        int sy0 = dy + mScreenY;
+        int sx1 = sx0 + srcW;
+        int sy1 = sy0 + srcH;
+
+        if (sx0 < mClipL) sx0 = mClipL;
+        if (sy0 < mClipT) sy0 = mClipT;
+        if (sx1 > mClipR) sx1 = mClipR;
+        if (sy1 > mClipB) sy1 = mClipB;
+        if (sx0 >= sx1 || sy0 >= sy1) return;
+
+        int tx0 = sx0 - mTileOrgX;
+        int ty0 = sy0 - mTileOrgY;
+        int copyW = sx1 - sx0;
+        int copyH = sy1 - sy0;
+
+        if (tx0 < 0) { copyW += tx0; tx0 = 0; }
+        if (ty0 < 0) { copyH += ty0; ty0 = 0; }
+        if (tx0 + copyW > mTile->width())  copyW = mTile->width()  - tx0;
+        if (ty0 + copyH > mTile->height()) copyH = mTile->height() - ty0;
+        if (copyW <= 0 || copyH <= 0) return;
+
+        int srcOffX = sx0 - (dx + mScreenX);
+        int srcOffY = sy0 - (dy + mScreenY);
+
+        const uint8_t* rle = (const uint8_t*)src;
+        const uint32_t* off = (const uint32_t*)rle;
+        uint16_t* tile = mTile->buffer();
+        int tStride = mTile->stride();
+        const int visL = srcOffX, visR = srcOffX + copyW;
+        const uint16_t srcColor = color.value;
+        const uint32_t viewA = mAlpha;
+
+        for (int y = 0; y < copyH; y++) {
+            uint32_t rowOff = off[srcOffY + y];
+            uint16_t* dstRow = tile + (ty0 + y) * tStride + tx0;
+            if (rowOff & 0x80000000) {
+                const uint8_t* srow = rle + (rowOff & 0x7FFFFFFF);
+                for (int x = 0; x < copyW; x++) {
+                    uint32_t a = srow[srcOffX + x];
+                    if (!a) continue;
+                    if (viewA != 255) a = (a * viewA) / 255;
+                    if (!a) continue;
+                    if (a >= 255) dstRow[x] = srcColor;
+                    else dstRow[x] = blend565(srcColor, dstRow[x], a);
+                }
+            } else {
+                const uint8_t* p = rle + rowOff;
+                int px = 0;
+                int loopCnt = 0;
+                while (px < srcW) {
+                    if (++loopCnt > srcW * 2) break;
+                    uint8_t g = *p++;
+                    uint8_t len = *p++;
+                    int n = (int)len + 1;
+                    int runR = px + n;
+                    int cl = px < visL ? visL : px, cr = runR > visR ? visR : runR;
+                    if (cr > cl && g) {
+                        uint32_t a = g;
+                        if (viewA != 255) a = (a * viewA) / 255;
+                        if (a) {
+                            uint16_t* dp = dstRow + (cl - visL);
+                            int cnt = cr - cl;
+                            if (a >= 255) {
+                                wordFill32(dp, cnt, srcColor);
+                            } else {
+                                for (int i = 0; i < cnt; i++)
+                                    dp[i] = blend565(srcColor, dp[i], a);
+                            }
+                        }
+                    }
+                    px = runR;
+                }
+            }
+        }
+    }
+
+    __attribute__((noinline, section(".ramfunc")))
+    void drawText(const char* utf8, int x, int y, RGB565 color) {
+        if (!utf8 || !mTile || !mTile->buffer()) return;
+        const FontSectionHeader* fh = fontSection();
+        if (!fh) return;
+
+        const char* p = utf8;
+        const char* end = utf8 + lithoStrlen(utf8);
+        int penX = x;
+        int baseline = y + (int)fh->ascent;
+        const int lineH = (int)fh->lineHeight;
+        const int originX = x;
+
+        while (p < end) {
+            if (*p == '\n') {
+                ++p;
+                penX = originX;
+                baseline += lineH;
+                continue;
+            }
+            int cp = utf8Decode(p, end);
+            if (cp < 0) continue;
+
+            const GlyphEntry* g = fontFindGlyph((uint32_t)cp);
+            if (!g) continue;
+
+            if (g->width > 0 && g->height > 0 && g->size > 0) {
+                int dx = penX + (int)g->bearingX;
+                int dy = baseline - (int)g->bearingY;
+                drawGlyphA8Blend(glyphPixels(g), (int)g->width, (int)g->height,
+                                 dx, dy, color);
+            }
+            penX += (int)g->advance;
+        }
+    }
+
+    // Measure UTF-8 text using packed glyph advances. Returns width;
+    // optional outH receives total height (lineHeight * lines).
+    static int measureText(const char* utf8, int* outH = nullptr) {
+        const FontSectionHeader* fh = fontSection();
+        if (!fh || !utf8) {
+            if (outH) *outH = 0;
+            return 0;
+        }
+        const char* p = utf8;
+        const char* end = utf8 + lithoStrlen(utf8);
+        int lineW = 0, maxW = 0, lines = 1;
+        while (p < end) {
+            if (*p == '\n') {
+                ++p;
+                if (lineW > maxW) maxW = lineW;
+                lineW = 0;
+                ++lines;
+                continue;
+            }
+            int cp = utf8Decode(p, end);
+            if (cp < 0) continue;
+            const GlyphEntry* g = fontFindGlyph((uint32_t)cp);
+            if (g) lineW += (int)g->advance;
+        }
+        if (lineW > maxW) maxW = lineW;
+        if (outH) *outH = lines * (int)fh->lineHeight;
+        return maxW;
     }
 
 private:

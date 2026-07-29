@@ -1,0 +1,5 @@
+# Path to a sans-serif CJK-capable TTF/OTF (not committed — large file).
+# Absolute path, or relative to this fonts/ directory.
+# Recommended: Noto Sans SC / Source Han Sans.
+# Copy this file to fontpath.txt and edit the path.
+C:\Windows\Fonts\NotoSansSC-VF.ttf

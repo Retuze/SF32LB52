@@ -4,6 +4,42 @@
 #   SIMULATOR=OFF  → ARM firmware (arm-none-eabi, hal/picolibc, .incbin)
 #   SIMULATOR=ON   → Host PC (native clang, no HAL, runtime resource loader)
 
+# ── Pack UI + fonts into generated/res_images.{bin,h} at build time ──
+set(LITHO_UI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ui/hello_litho")
+set(LITHO_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/generated")
+set(LITHO_PACK_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/tools/pack_res.py")
+set(LITHO_FONT_SCRIPT "${CMAKE_SOURCE_DIR}/tools/font_convert/font_convert.py")
+
+file(GLOB LITHO_UI_ASSETS CONFIGURE_DEPENDS
+    "${LITHO_UI_DIR}/tint/*.png"
+    "${LITHO_UI_DIR}/solid/*.png"
+    "${LITHO_UI_DIR}/alpha/*.png"
+    "${LITHO_UI_DIR}/info.txt"
+    "${LITHO_UI_DIR}/fonts/charset.txt"
+    "${LITHO_UI_DIR}/fonts/fontpath.txt"
+)
+
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
+
+add_custom_command(
+    OUTPUT
+        "${LITHO_GEN_DIR}/res_images.bin"
+        "${LITHO_GEN_DIR}/res_images.h"
+    COMMAND ${Python3_EXECUTABLE} "${LITHO_PACK_SCRIPT}"
+            "${LITHO_UI_DIR}" "${LITHO_GEN_DIR}"
+    DEPENDS
+        "${LITHO_PACK_SCRIPT}"
+        "${LITHO_FONT_SCRIPT}"
+        ${LITHO_UI_ASSETS}
+    COMMENT "Packing LithoUI resources (images + fonts) → res_images.bin"
+    VERBATIM
+)
+
+add_custom_target(litho_resources DEPENDS
+    "${LITHO_GEN_DIR}/res_images.bin"
+    "${LITHO_GEN_DIR}/res_images.h"
+)
+
 if(SIMULATOR)
     # ── Host build (PC simulator) ──────────────────────────────────
     add_library(litho STATIC
@@ -34,7 +70,7 @@ else()
     # dependencies are NOT auto-tracked by CMake/Ninja, so a regenerated bundle
     # would NOT trigger a rebuild. Declare the dependency explicitly.
     set_source_files_properties(generated/res_embed.S PROPERTIES
-        OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/generated/res_images.bin")
+        OBJECT_DEPENDS "${LITHO_GEN_DIR}/res_images.bin")
 
     target_include_directories(litho PUBLIC
         ${CMAKE_SOURCE_DIR}/components/lithoui
@@ -52,6 +88,8 @@ else()
         -mthumb
     )
 endif()
+
+add_dependencies(litho litho_resources)
 
 # Alias so projects can link as either `litho` or `lithoui`
 add_library(lithoui ALIAS litho)

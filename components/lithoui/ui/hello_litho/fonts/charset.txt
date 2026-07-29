@@ -1,0 +1,18 @@
+# LithoUI charset — only listed codepoints are packed (unicode ascending).
+# Format: single hex codepoint, or inclusive range AAAA-BBBB. # comments OK.
+
+# ASCII printable
+0020-007E
+
+# Demo CJK: 一你好世界手表设置音乐
+4E00
+4E16
+4E50
+4F60
+597D
+624B
+754C
+7F6E
+8868
+8BBE
+97F3
