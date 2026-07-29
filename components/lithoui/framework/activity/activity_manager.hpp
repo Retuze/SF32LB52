@@ -205,6 +205,9 @@ private:
         }
     }
 
+    // Enter scale starts small; exit shrinks toward this (0.1×).
+    static constexpr uint32_t kScaleFrom = View::kScaleOne / 10; // 0.1 in 16.16
+
     void applyEnterStart(View* root, const TransitionSpec& spec) {
         int W = mWindowManager.displayWidth();
         int H = mWindowManager.displayHeight();
@@ -214,14 +217,17 @@ private:
         root->setTranslationY(ty);
         if (spec.enter.fade) root->setAlpha(0);
         else root->setAlpha(255);
+        if (spec.enter.scale) root->setScale(kScaleFrom);
+        else root->setScale(View::kScaleOne);
     }
 
     void applyExitStart(View* root, const TransitionSpec& spec) {
-        // Exit starts at identity; animation targets off-screen / fade.
+        // Exit starts at identity; animation targets off-screen / fade / shrink.
         (void)spec;
         root->setTranslationX(0);
         root->setTranslationY(0);
         root->setAlpha(255);
+        root->setScale(View::kScaleOne);
     }
 
     using EndFn = void (*)(void*);
@@ -243,6 +249,7 @@ private:
                     anim.translationY(0);
             }
             if (layer.fade) anim.alpha(255);
+            if (layer.scale) anim.scale((float)View::kScaleOne);
         } else {
             if (layer.slide != SlideEdge::None) {
                 int16_t tx = 0, ty = 0;
@@ -252,6 +259,7 @@ private:
                 if (ty != 0) anim.translationY((float)ty);
             }
             if (layer.fade) anim.alpha(0);
+            if (layer.scale) anim.scale((float)kScaleFrom);
         }
 
         if (endCb) anim.withEndAction(endCb, this);
@@ -263,6 +271,7 @@ private:
         root->setTranslationX(0);
         root->setTranslationY(0);
         root->setAlpha(255);
+        root->setScale(View::kScaleOne);
     }
 
     static void hideWindow(Activity* a) {

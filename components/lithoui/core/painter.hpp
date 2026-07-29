@@ -49,6 +49,57 @@ static inline uint16_t blend565(uint16_t src, uint16_t dst, uint32_t alpha) {
     return r | g | b;
 }
 
+// Map destination pixel → source Q8 coordinate for bilinear (half-pixel centered).
+static inline void scaleMapQ8(int local, int dstSize, int srcSize, int& i0, int& i1, int& frac) {
+    if (dstSize <= 0 || srcSize <= 0) {
+        i0 = i1 = 0;
+        frac = 0;
+        return;
+    }
+    int32_t u = ((int32_t)(local * 2 + 1) * srcSize * 128) / dstSize - 128;
+    if (u < 0) u = 0;
+    int32_t maxU = ((int32_t)srcSize - 1) << 8;
+    if (u > maxU) u = maxU;
+    i0 = (int)(u >> 8);
+    frac = (int)(u & 0xFF);
+    i1 = i0 + 1;
+    if (i1 >= srcSize) i1 = srcSize - 1;
+}
+
+// Bilinear RGB565 + alpha (weights in 0..255). Premultiplied for soft edges.
+static inline void bilinear565(uint16_t c00, uint32_t a00,
+                               uint16_t c10, uint32_t a10,
+                               uint16_t c01, uint32_t a01,
+                               uint16_t c11, uint32_t a11,
+                               int fx, int fy,
+                               uint16_t& outC, uint32_t& outA) {
+    const uint32_t w00 = (uint32_t)(255 - fx) * (uint32_t)(255 - fy);
+    const uint32_t w10 = (uint32_t)fx * (uint32_t)(255 - fy);
+    const uint32_t w01 = (uint32_t)(255 - fx) * (uint32_t)fy;
+    const uint32_t w11 = (uint32_t)fx * (uint32_t)fy;
+    const uint32_t A = a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11;
+    if (!A) {
+        outC = 0;
+        outA = 0;
+        return;
+    }
+    outA = A / (255u * 255u);
+    if (outA > 255) outA = 255;
+    uint32_t r = ((c00 >> 11) & 0x1F) * a00 * w00 + ((c10 >> 11) & 0x1F) * a10 * w10
+               + ((c01 >> 11) & 0x1F) * a01 * w01 + ((c11 >> 11) & 0x1F) * a11 * w11;
+    uint32_t g = ((c00 >> 5)  & 0x3F) * a00 * w00 + ((c10 >> 5)  & 0x3F) * a10 * w10
+               + ((c01 >> 5)  & 0x3F) * a01 * w01 + ((c11 >> 5)  & 0x3F) * a11 * w11;
+    uint32_t b = ( c00        & 0x1F) * a00 * w00 + ( c10        & 0x1F) * a10 * w10
+               + ( c01        & 0x1F) * a01 * w01 + ( c11        & 0x1F) * a11 * w11;
+    r /= A;
+    g /= A;
+    b /= A;
+    if (r > 0x1F) r = 0x1F;
+    if (g > 0x3F) g = 0x3F;
+    if (b > 0x1F) b = 0x1F;
+    outC = (uint16_t)((r << 11) | (g << 5) | b);
+}
+
 // Fast 32-bit word fill of a uint16_t pixel buffer.
 // Aligns to 4-byte boundary if needed, then writes pairs of pixels as uint32_t.
 // Updates dp and cnt in-place (may advance by 1 for alignment).
@@ -81,6 +132,14 @@ public:
     int  screenX() const { return mScreenX; }
     int  screenY() const { return mScreenY; }
 
+    // Fixed-point: 65536 = 1.0 (16.16, matches View::kScaleOne)
+    static constexpr uint32_t kScaleOne = 65536u;
+    void setScale(uint32_t s) { mScale = s ? s : 1; }
+    uint32_t scale() const { return mScale; }
+    static inline int applyScale(int x, uint32_t s) {
+        return (int)(((int64_t)x * (int64_t)s + 32768) >> 16);
+    }
+
     void setAlpha(uint8_t a) { mAlpha = a; }
     uint8_t alpha() const { return mAlpha; }
 
@@ -101,11 +160,23 @@ public:
 
     __attribute__((noinline, section(".ramfunc")))
     void fillRect(int x, int y, int w, int h, RGB565 c) {
-        if (!mTile || !mTile->buffer()) return;
-        int sx0 = x + mScreenX;
-        int sy0 = y + mScreenY;
-        int sx1 = sx0 + w;
-        int sy1 = sy0 + h;
+        if (!mTile || !mTile->buffer() || w <= 0 || h <= 0) return;
+
+        // Logical → screen (scale about painter origin)
+        int sx0, sy0, sx1, sy1;
+        if (mScale == kScaleOne) {
+            sx0 = x + mScreenX;
+            sy0 = y + mScreenY;
+            sx1 = sx0 + w;
+            sy1 = sy0 + h;
+        } else {
+            sx0 = mScreenX + applyScale(x, mScale);
+            sy0 = mScreenY + applyScale(y, mScale);
+            sx1 = mScreenX + applyScale(x + w, mScale);
+            sy1 = mScreenY + applyScale(y + h, mScale);
+            if (sx1 <= sx0) sx1 = sx0 + 1;
+            if (sy1 <= sy0) sy1 = sy0 + 1;
+        }
 
         if (sx0 < mClipL) sx0 = mClipL;
         if (sy0 < mClipT) sy0 = mClipT;
@@ -122,6 +193,7 @@ public:
         if (ty0 < 0) ty0 = 0;
         if (tx1 > mTile->width())  tx1 = mTile->width();
         if (ty1 > mTile->height()) ty1 = mTile->height();
+        if (tx0 >= tx1 || ty0 >= ty1) return;
 
         uint16_t* row = mTile->buffer() + ty0 * mTile->stride();
 
@@ -161,7 +233,10 @@ public:
     void drawImage(const void* src, int fmt,
                    int srcW, int srcH, int dx, int dy,
                    const RGB565* tint = nullptr) {
-
+        if (mScale != kScaleOne) {
+            drawImageScaled(src, fmt, srcW, srcH, dx, dy, tint);
+            return;
+        }
         int imageFormat = LITHO_FORMAT(fmt);
         int paletteSize = LITHO_PALETTE_SIZE(fmt);
 
@@ -922,6 +997,86 @@ public:
                           int dx, int dy, RGB565 color) {
         if (!mTile || !mTile->buffer() || srcW <= 0 || srcH <= 0 || !src) return;
 
+        if (mScale != kScaleOne) {
+            // Bilinear stretch of glyph coverage into scaled destination.
+            int dstW = applyScale(srcW, mScale);
+            int dstH = applyScale(srcH, mScale);
+            if (dstW < 1) dstW = 1;
+            if (dstH < 1) dstH = 1;
+            int sx0 = mScreenX + applyScale(dx, mScale);
+            int sy0 = mScreenY + applyScale(dy, mScale);
+            int sx1 = sx0 + dstW;
+            int sy1 = sy0 + dstH;
+            if (sx0 < mClipL) sx0 = mClipL;
+            if (sy0 < mClipT) sy0 = mClipT;
+            if (sx1 > mClipR) sx1 = mClipR;
+            if (sy1 > mClipB) sy1 = mClipB;
+            if (sx0 >= sx1 || sy0 >= sy1) return;
+            int tx0 = sx0 - mTileOrgX, ty0 = sy0 - mTileOrgY;
+            int tx1 = sx1 - mTileOrgX, ty1 = sy1 - mTileOrgY;
+            if (tx0 < 0) tx0 = 0;
+            if (ty0 < 0) ty0 = 0;
+            if (tx1 > mTile->width())  tx1 = mTile->width();
+            if (ty1 > mTile->height()) ty1 = mTile->height();
+            if (tx0 >= tx1 || ty0 >= ty1) return;
+
+            const int baseSX = mScreenX + applyScale(dx, mScale);
+            const int baseSY = mScreenY + applyScale(dy, mScale);
+            const uint8_t* rle = (const uint8_t*)src;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint16_t* tile = mTile->buffer();
+            int tStride = mTile->stride();
+            const uint16_t srcColor = color.value;
+            const uint32_t viewA = mAlpha;
+
+            auto sampleA8 = [&](int sx, int sy) -> uint32_t {
+                if (sx < 0 || sy < 0 || sx >= srcW || sy >= srcH) return 0;
+                uint32_t rowOff = off[sy];
+                if (rowOff & 0x80000000) {
+                    return (rle + (rowOff & 0x7FFFFFFF))[sx];
+                }
+                const uint8_t* p = rle + rowOff;
+                int px = 0;
+                while (px <= sx) {
+                    uint8_t g = *p++;
+                    uint8_t len = *p++;
+                    int n = (int)len + 1;
+                    if (px + n > sx) return g;
+                    px += n;
+                }
+                return 0;
+            };
+
+            for (int ty = ty0; ty < ty1; ty++) {
+                int localY = (ty + mTileOrgY) - baseSY;
+                if (localY < 0 || localY >= dstH) continue;
+                int y0, y1, fy;
+                scaleMapQ8(localY, dstH, srcH, y0, y1, fy);
+                uint16_t* dstRow = tile + ty * tStride;
+                for (int tx = tx0; tx < tx1; tx++) {
+                    int localX = (tx + mTileOrgX) - baseSX;
+                    if (localX < 0 || localX >= dstW) continue;
+                    int x0, x1, fx;
+                    scaleMapQ8(localX, dstW, srcW, x0, x1, fx);
+                    uint32_t a00 = sampleA8(x0, y0);
+                    uint32_t a10 = sampleA8(x1, y0);
+                    uint32_t a01 = sampleA8(x0, y1);
+                    uint32_t a11 = sampleA8(x1, y1);
+                    uint32_t w00 = (uint32_t)(255 - fx) * (uint32_t)(255 - fy);
+                    uint32_t w10 = (uint32_t)fx * (uint32_t)(255 - fy);
+                    uint32_t w01 = (uint32_t)(255 - fx) * (uint32_t)fy;
+                    uint32_t w11 = (uint32_t)fx * (uint32_t)fy;
+                    uint32_t a = (a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11) / (255u * 255u);
+                    if (!a) continue;
+                    if (viewA != 255) a = (a * viewA) / 255;
+                    if (!a) continue;
+                    if (a >= 255) dstRow[tx] = srcColor;
+                    else dstRow[tx] = blend565(srcColor, dstRow[tx], a);
+                }
+            }
+            return;
+        }
+
         int sx0 = dx + mScreenX;
         int sy0 = dy + mScreenY;
         int sx1 = sx0 + srcW;
@@ -1065,6 +1220,238 @@ public:
     }
 
 private:
+    void drawImageScaled(const void* src, int fmt,
+                         int srcW, int srcH, int dx, int dy,
+                         const RGB565* tint) {
+        if (!mTile || !mTile->buffer() || !src || srcW <= 0 || srcH <= 0) return;
+
+        int imageFormat = LITHO_FORMAT(fmt);
+        int paletteSize = LITHO_PALETTE_SIZE(fmt);
+        int palBytes = paletteSize * 2;
+
+        int dstW = applyScale(srcW, mScale);
+        int dstH = applyScale(srcH, mScale);
+        if (dstW < 1) dstW = 1;
+        if (dstH < 1) dstH = 1;
+
+        int sx0 = mScreenX + applyScale(dx, mScale);
+        int sy0 = mScreenY + applyScale(dy, mScale);
+        int sx1 = sx0 + dstW;
+        int sy1 = sy0 + dstH;
+
+        if (sx0 < mClipL) sx0 = mClipL;
+        if (sy0 < mClipT) sy0 = mClipT;
+        if (sx1 > mClipR) sx1 = mClipR;
+        if (sy1 > mClipB) sy1 = mClipB;
+        if (sx0 >= sx1 || sy0 >= sy1) return;
+
+        int tx0 = sx0 - mTileOrgX;
+        int ty0 = sy0 - mTileOrgY;
+        int tx1 = sx1 - mTileOrgX;
+        int ty1 = sy1 - mTileOrgY;
+        if (tx0 < 0) tx0 = 0;
+        if (ty0 < 0) ty0 = 0;
+        if (tx1 > mTile->width())  tx1 = mTile->width();
+        if (ty1 > mTile->height()) ty1 = mTile->height();
+        if (tx0 >= tx1 || ty0 >= ty1) return;
+
+        const int baseSX = mScreenX + applyScale(dx, mScale);
+        const int baseSY = mScreenY + applyScale(dy, mScale);
+        uint16_t* tile = mTile->buffer();
+        int tStride = mTile->stride();
+
+        for (int ty = ty0; ty < ty1; ty++) {
+            int screenY = ty + mTileOrgY;
+            int localY = screenY - baseSY;
+            if (localY < 0 || localY >= dstH) continue;
+            int y0, y1, fy;
+            scaleMapQ8(localY, dstH, srcH, y0, y1, fy);
+
+            uint16_t* dstRow = tile + ty * tStride;
+            for (int tx = tx0; tx < tx1; tx++) {
+                int screenX = tx + mTileOrgX;
+                int localX = screenX - baseSX;
+                if (localX < 0 || localX >= dstW) continue;
+                int x0, x1, fx;
+                scaleMapQ8(localX, dstW, srcW, x0, x1, fx);
+
+                uint16_t c00 = 0, c10 = 0, c01 = 0, c11 = 0;
+                uint32_t a00 = 0, a10 = 0, a01 = 0, a11 = 0;
+                sampleImagePixel(src, imageFormat, palBytes, srcW, srcH, x0, y0, tint, c00, a00);
+                sampleImagePixel(src, imageFormat, palBytes, srcW, srcH, x1, y0, tint, c10, a10);
+                sampleImagePixel(src, imageFormat, palBytes, srcW, srcH, x0, y1, tint, c01, a01);
+                sampleImagePixel(src, imageFormat, palBytes, srcW, srcH, x1, y1, tint, c11, a11);
+
+                uint16_t color = 0;
+                uint32_t pixelA = 0;
+                bilinear565(c00, a00, c10, a10, c01, a01, c11, a11, fx, fy, color, pixelA);
+                uint32_t a = pixelA * (uint32_t)mAlpha / 255;
+                if (!a) continue;
+                if (a >= 255) dstRow[tx] = color;
+                else dstRow[tx] = blend565(color, dstRow[tx], a);
+            }
+        }
+    }
+
+    static bool sampleImagePixel(const void* src, int imageFormat, int palBytes,
+                                 int srcW, int srcH, int sx, int sy,
+                                 const RGB565* tint,
+                                 uint16_t& outColor, uint32_t& outA) {
+        outColor = 0;
+        outA = 0;
+        if (sx < 0 || sy < 0 || sx >= srcW || sy >= srcH) return false;
+
+        if (imageFormat == 0) {
+            const uint8_t* rle = (const uint8_t*)src;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint32_t rowOff = off[sy];
+            uint8_t g = 0;
+            if (rowOff & 0x80000000) {
+                g = (rle + (rowOff & 0x7FFFFFFF))[sx];
+            } else {
+                const uint8_t* p = rle + rowOff;
+                int px = 0;
+                while (px <= sx) {
+                    uint8_t gv = *p++;
+                    uint8_t len = *p++;
+                    int n = (int)len + 1;
+                    if (px + n > sx) { g = gv; break; }
+                    px += n;
+                }
+            }
+            if (tint) {
+                uint32_t tr = (tint->value >> 11) & 0x1F, tg = (tint->value >> 5) & 0x3F, tb = tint->value & 0x1F;
+                uint32_t r = (tr * g) / 255, gg = (tg * g) / 255, b = (tb * g) / 255;
+                outColor = (uint16_t)((r << 11) | (gg << 5) | b);
+            } else {
+                outColor = (uint16_t)(((g >> 3) & 0x1F) << 11 | ((g >> 2) & 0x3F) << 5 | ((g >> 3) & 0x1F));
+            }
+            outA = 255;
+            return true;
+        }
+
+        if (imageFormat == 1) {
+            const uint16_t* pal = (const uint16_t*)src;
+            const uint8_t*  rle = (const uint8_t*)src + palBytes;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint32_t rowOff = off[sy];
+            uint8_t ix = 0;
+            if (rowOff & 0x80000000) {
+                ix = (rle + (rowOff & 0x7FFFFFFF))[sx];
+            } else {
+                const uint8_t* p = rle + rowOff;
+                int px = 0;
+                while (px <= sx) {
+                    uint8_t i = *p++;
+                    uint8_t len = *p++;
+                    int n = (int)len + 1;
+                    if (px + n > sx) { ix = i; break; }
+                    px += n;
+                }
+            }
+            outColor = pal[ix];
+            outA = 255;
+            return true;
+        }
+
+        if (imageFormat == 2) {
+            const uint16_t* pal = (const uint16_t*)src;
+            const uint8_t*  rle = (const uint8_t*)src + palBytes;
+            const uint32_t* off = (const uint32_t*)rle;
+            const uint8_t* p = rle + off[sy];
+            int px = 0;
+            while (px <= sx) {
+                uint8_t head = *p++;
+                if (head & 0x80) {
+                    int n = (head & 0x7F) + 1;
+                    uint8_t ix = *p++;
+                    if (px + n > sx) { outColor = pal[ix]; outA = 255; return true; }
+                    px += n;
+                } else {
+                    uint8_t tt = (head >> 5) & 0x03;
+                    int n = (head & 0x1F) + 1;
+                    if (tt == 0) {
+                        if (px + n > sx) return false; // fully transparent
+                        px += n;
+                    } else {
+                        uint8_t ix = *p++;
+                        if (px + n > sx) {
+                            outColor = pal[ix];
+                            outA = kTTAlpha[tt];
+                            return outA > 0;
+                        }
+                        px += n;
+                    }
+                }
+            }
+            return false;
+        }
+
+        if (imageFormat == 3) {
+            const uint8_t* rle = (const uint8_t*)src;
+            const uint32_t* off = (const uint32_t*)rle;
+            uint32_t rowOff = off[sy];
+            if (rowOff & 0x80000000) {
+                outColor = ((const uint16_t*)(rle + (rowOff & 0x7FFFFFFF)))[sx];
+                outA = 255;
+                return true;
+            }
+            const uint8_t* p = rle + rowOff;
+            int px = 0;
+            while (px <= sx) {
+                uint8_t cmd = *p++;
+                int n = (cmd & 0x7F) + 1;
+                if (cmd & 0x80) {
+                    if (px + n > sx) {
+                        outColor = ((const uint16_t*)p)[sx - px];
+                        outA = 255;
+                        return true;
+                    }
+                    p += n * 2;
+                    px += n;
+                } else {
+                    uint16_t c = *(const uint16_t*)p; p += 2;
+                    if (px + n > sx) { outColor = c; outA = 255; return true; }
+                    px += n;
+                }
+            }
+            return false;
+        }
+
+        if (imageFormat == 4) {
+            const uint8_t* rle = (const uint8_t*)src;
+            const uint32_t* off = (const uint32_t*)rle;
+            const uint8_t* p = rle + off[sy];
+            int px = 0;
+            while (px <= sx) {
+                uint8_t head = *p++;
+                if (head & 0x80) {
+                    int n = (head & 0x7F) + 1;
+                    uint16_t c = *(const uint16_t*)p; p += 2;
+                    if (px + n > sx) { outColor = c; outA = 255; return true; }
+                    px += n;
+                } else {
+                    uint8_t tt = (head >> 5) & 0x03;
+                    int n = (head & 0x1F) + 1;
+                    if (tt == 0) {
+                        if (px + n > sx) return false;
+                        px += n;
+                    } else {
+                        uint16_t c = *(const uint16_t*)p; p += 2;
+                        if (px + n > sx) {
+                            outColor = c;
+                            outA = kTTAlpha[tt];
+                            return outA > 0;
+                        }
+                        px += n;
+                    }
+                }
+            }
+            return false;
+        }
+        return false;
+    }
+
     Tile*   mTile     = nullptr;
     int     mTileOrgX = 0;
     int     mTileOrgY = 0;
@@ -1076,6 +1463,7 @@ private:
     int     mClipB    = 32767;
     uint8_t mAlpha    = 255;
     uint8_t mTileIdx  = 0;
+    uint32_t mScale   = kScaleOne;
 };
 
 } // namespace litho

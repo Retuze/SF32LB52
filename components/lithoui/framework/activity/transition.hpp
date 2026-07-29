@@ -17,7 +17,7 @@ enum class SlideEdge : uint8_t {
 struct LayerAnim {
     SlideEdge slide = SlideEdge::None;
     bool      fade  = false;
-    // Scale reserved for next iteration (View scale not wired yet).
+    // Uniform scale about page center (View::kScaleOne = 1.0, 16.16).
     bool      scale = false;
 
     LayerAnim& withFade()  { fade = true; return *this; }
@@ -79,6 +79,13 @@ struct TransitionSpec {
         TransitionSpec s;
         s.enter.fade = true;
         s.exit.fade  = true;
+        return s;
+    }
+    // Scale about center: enter from ~0.1→1, exit 1→~0.1
+    static TransitionSpec scale() {
+        TransitionSpec s;
+        s.enter.scale = true;
+        s.exit.scale  = true;
         return s;
     }
     // Push: new enters from edge, old exits toward the opposite edge

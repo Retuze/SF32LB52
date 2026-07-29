@@ -24,15 +24,25 @@ public:
     int  height() const { return mBounds.height; }
 
     // Animated visual properties
-    int16_t translationX() const { return mTranslationX; }
-    int16_t translationY() const { return mTranslationY; }
-    uint8_t alpha()        const { return mAlpha; }
+    int16_t  translationX() const { return mTranslationX; }
+    int16_t  translationY() const { return mTranslationY; }
+    uint8_t  alpha()        const { return mAlpha; }
+    // Fixed-point scale: kScaleOne (65536) = 1.0 (16.16). Higher precision
+    // than 8.8 avoids 1–2px snapping of child positions during scale anims.
+    static constexpr uint32_t kScaleOne = 65536u;
+    uint32_t scale()        const { return mScale; }
 
     // Setters invalidate both old and new screen rects to prevent ghosting
     // during animation. Alpha changes only need single invalidate (no motion).
     void setTranslationX(int16_t tx);
     void setTranslationY(int16_t ty);
     void setAlpha(uint8_t a)         { mAlpha = a; invalidate(); }
+    void setScale(uint32_t s);
+
+    // Round local → scaled pixels: (x * scale + 0.5) in 16.16.
+    static inline int applyScale(int x, uint32_t s) {
+        return (int)(((int64_t)x * (int64_t)s + 32768) >> 16);
+    }
 
     ViewPropertyAnimator& animate();
 
@@ -42,13 +52,25 @@ public:
 
     virtual void onDraw(Painter& p) { (void)p; }
 
-    // Local-space bounds including all transforms (translation, rotation).
-    // Default: mBounds shifted by translation.  Subclasses override to
-    // add rotation, scale, etc.  Used by screenBounds() and ViewGroup clip.
+    // Local-space bounds including all transforms (translation, scale).
+    // Default: mBounds shifted by translation; scale expands about center.
+    // Used by screenBounds() and ViewGroup clip.
     virtual Region transformedBounds() const {
-        return {static_cast<int16_t>(mBounds.x + mTranslationX),
-                static_cast<int16_t>(mBounds.y + mTranslationY),
-                mBounds.width, mBounds.height};
+        int16_t x = static_cast<int16_t>(mBounds.x + mTranslationX);
+        int16_t y = static_cast<int16_t>(mBounds.y + mTranslationY);
+        int16_t w = mBounds.width;
+        int16_t h = mBounds.height;
+        if (mScale != kScaleOne && w > 0 && h > 0) {
+            int sw = applyScale(w, mScale);
+            int sh = applyScale(h, mScale);
+            if (sw < 1) sw = 1;
+            if (sh < 1) sh = 1;
+            x = (int16_t)(x + (w - sw) / 2);
+            y = (int16_t)(y + (h - sh) / 2);
+            w = (int16_t)sw;
+            h = (int16_t)sh;
+        }
+        return {x, y, w, h};
     }
 
     // Compute screen-space rectangle for this view (bounds + translation,
@@ -79,6 +101,7 @@ protected:
     int16_t      mTranslationX  = 0;
     int16_t      mTranslationY  = 0;
     uint8_t      mAlpha         = 255;
+    uint32_t     mScale         = kScaleOne;
     ViewGroup*   mParent        = nullptr;
     DirtyList*   mDirtyList     = nullptr;
     uint16_t     mTileMask      = 0;  // 0=draw always, bit i=covered
@@ -96,6 +119,11 @@ inline void viewSetTranslationY(void* target, float val) {
 }
 inline void viewSetAlpha(void* target, float val) {
     ((View*)target)->setAlpha((uint8_t)val);
+}
+inline void viewSetScale(void* target, float val) {
+    if (val < 1.f) val = 1.f;
+    if (val > 4294967040.f) val = 4294967040.f; // leave headroom below UINT32_MAX
+    ((View*)target)->setScale((uint32_t)(val + 0.5f));
 }
 
 } // namespace litho

@@ -8,7 +8,7 @@ namespace litho {
 
 class ViewPropertyAnimator {
 public:
-    static constexpr int kMaxProps = 4;
+    static constexpr int kMaxProps = 5;
     using EndCallback = void (*)(void* user);
 
     explicit ViewPropertyAnimator(View* view) : mView(view) {}
@@ -21,6 +21,9 @@ public:
     }
     ViewPropertyAnimator& alpha(float to) {
         return addProp((float)mView->alpha(), to, viewSetAlpha);
+    }
+    ViewPropertyAnimator& scale(float to) {
+        return addProp((float)mView->scale(), to, viewSetScale);
     }
 
     ViewPropertyAnimator& setDuration(uint32_t ms) { mDuration = ms; return *this; }

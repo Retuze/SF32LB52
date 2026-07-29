@@ -45,17 +45,23 @@ public:
 
     void draw(Painter& p) {
         if (!mVisible || !mRootView) return;
-        // Apply root translation/alpha so Activity transitions are visible.
-        // (Children are drawn relative to Painter screen origin.)
+        // Apply root translation / scale / alpha so Activity transitions show.
         const int ox = mRootView->translationX();
         const int oy = mRootView->translationY();
         const uint8_t a = mRootView->alpha();
-        if (ox == 0 && oy == 0 && a == 255) {
+        const uint32_t sc = mRootView->scale();
+        if (ox == 0 && oy == 0 && a == 255 && sc == View::kScaleOne) {
             mRootView->onDraw(p);
             return;
         }
+        // Pivot at root center: origin' = translation + pivot*(1 - scale)
+        const int pivX = mRootView->width()  / 2;
+        const int pivY = mRootView->height() / 2;
+        const int originX = p.screenX() + ox + pivX - View::applyScale(pivX, sc);
+        const int originY = p.screenY() + oy + pivY - View::applyScale(pivY, sc);
         Painter cp = p;
-        cp.setScreenOrigin(p.screenX() + ox, p.screenY() + oy);
+        cp.setScreenOrigin(originX, originY);
+        cp.setScale(sc);
         cp.setAlpha((uint8_t)((uint32_t)p.alpha() * a / 255));
         mRootView->onDraw(cp);
     }

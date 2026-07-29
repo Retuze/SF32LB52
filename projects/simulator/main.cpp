@@ -29,7 +29,7 @@ using namespace litho;
 
 static constexpr int kScreenW = 390;
 static constexpr int kScreenH = 450;
-static constexpr uint16_t kTransMs = 450;
+static constexpr uint16_t kTransMs = 1500;
 
 // ── Transition catalog ───────────────────────────────────────────
 
@@ -44,10 +44,12 @@ static TransitionSpec makeTrans(int id) {
     case 6:  return TransitionSpec::pushFromLeft().setDuration(kTransMs);
     case 7:  return TransitionSpec::pushFromTop().setDuration(kTransMs);
     case 8:  return TransitionSpec::pushFromBottom().setDuration(kTransMs);
-    case 9:  return TransitionSpec::slideFromRight().withFade().setDuration(kTransMs);
-    case 10: return TransitionSpec::slideFromBottom().withFade().setDuration(kTransMs);
-    case 11: return TransitionSpec::pushFromRight().withFade().setDuration(kTransMs);
-    case 12: return TransitionSpec::pushFromBottom().withFade().setDuration(kTransMs);
+    case 9:  return TransitionSpec::scale().setDuration(kTransMs);
+    case 10: return TransitionSpec::scale().withFade().setDuration(kTransMs);
+    case 11: return TransitionSpec::slideFromRight().withFade().setDuration(kTransMs);
+    case 12: return TransitionSpec::slideFromBottom().withFade().setDuration(kTransMs);
+    case 13: return TransitionSpec::pushFromRight().withFade().setDuration(kTransMs);
+    case 14: return TransitionSpec::pushFromBottom().withFade().setDuration(kTransMs);
     default: return TransitionSpec::fade().setDuration(kTransMs);
     }
 }
@@ -62,6 +64,8 @@ static const char* const kTransLabels[] = {
     "Push Left",
     "Push Top",
     "Push Bottom",
+    "Scale",
+    "Scale + Fade",
     "SlideR + Fade",
     "SlideB + Fade",
     "PushR + Fade",

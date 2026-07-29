@@ -46,6 +46,15 @@ void View::setTranslationY(int16_t ty) {
     if (mDirtyList) mDirtyList->markDirty(old);
 }
 
+void View::setScale(uint32_t s) {
+    if (s == 0) s = 1;
+    if (s == mScale) return;
+    Region old = screenBounds();
+    mScale = s;
+    invalidate();
+    if (mDirtyList) mDirtyList->markDirty(old);
+}
+
 bool View::dispatchTouchEvent(TouchEvent& ev, int screenX, int screenY) {
     (void)screenX; (void)screenY;
     if (onTouchEvent(ev)) {
