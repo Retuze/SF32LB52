@@ -29,6 +29,7 @@ inline float applyInterpolator(Interpolator type, float t) {
 class ValueAnimator {
 public:
     using UpdateCallback = void (*)(float fraction, void* user);
+    using EndCallback    = void (*)(void* user);
 
     ValueAnimator& setDuration(uint32_t ms) {
         mDurationMs = ms;
@@ -46,22 +47,39 @@ public:
         return *this;
     }
 
+    ValueAnimator& setEndCallback(EndCallback cb, void* user) {
+        mEndCallback = cb;
+        mEndUser     = user;
+        return *this;
+    }
+
     ValueAnimator& setRepeatCount(int count) {
         mRepeatCount = count;
         return *this;
     }
 
     void start() {
-        mWaitingStart = true;
-        mRunning      = true;
+        mWaitingStart    = true;
+        mRunning         = true;
+        mPendingEnd      = false;
         mRepeatRemaining = mRepeatCount;
     }
 
     void cancel() {
-        mRunning = false;
+        if (!mRunning) return;
+        mRunning    = false;
+        mPendingEnd = false;
     }
 
     bool isRunning() const { return mRunning; }
+
+    // Called by AnimationManager after the animator is removed from the
+    // active list, so end callbacks may safely destroy owning views.
+    void firePendingEnd() {
+        if (!mPendingEnd) return;
+        mPendingEnd = false;
+        if (mEndCallback) mEndCallback(mEndUser);
+    }
 
     void onFrame(uint32_t frameTimeMs) {
         if (!mRunning) return;
@@ -72,10 +90,10 @@ public:
         }
 
         float elapsed = (float)(frameTimeMs - mStartTimeMs);
-        float raw     = elapsed / (float)mDurationMs;
+        float raw     = (mDurationMs > 0) ? (elapsed / (float)mDurationMs) : 1.0f;
         float t       = applyInterpolator(mInterpolator, raw);
 
-        if (mCallback) mCallback(t, mUser);
+        if (mCallback) mCallback(t > 1.0f ? 1.0f : t, mUser);
 
         if (raw >= 1.0f) {
             if (mCallback) mCallback(1.0f, mUser);
@@ -85,25 +103,28 @@ public:
                 mStartTimeMs  = frameTimeMs;
                 mWaitingStart = false;
             } else if (mRepeatRemaining < 0) {
-                // infinite repeat
                 mStartTimeMs  = frameTimeMs;
                 mWaitingStart = false;
             } else {
-                mRunning = false;
+                mRunning    = false;
+                mPendingEnd = true;
             }
         }
     }
 
 private:
-    uint32_t      mStartTimeMs    = 0;
-    uint32_t      mDurationMs     = 300;
-    Interpolator  mInterpolator   = Interpolator::LINEAR;
-    bool          mWaitingStart   = false;
-    bool          mRunning        = false;
-    int           mRepeatCount    = 0;
+    uint32_t      mStartTimeMs     = 0;
+    uint32_t      mDurationMs      = 300;
+    Interpolator  mInterpolator    = Interpolator::LINEAR;
+    bool          mWaitingStart    = false;
+    bool          mRunning         = false;
+    bool          mPendingEnd      = false;
+    int           mRepeatCount     = 0;
     int           mRepeatRemaining = 0;
-    UpdateCallback mCallback      = nullptr;
-    void*         mUser           = nullptr;
+    UpdateCallback mCallback       = nullptr;
+    void*         mUser            = nullptr;
+    EndCallback   mEndCallback     = nullptr;
+    void*         mEndUser         = nullptr;
 };
 
 } // namespace litho

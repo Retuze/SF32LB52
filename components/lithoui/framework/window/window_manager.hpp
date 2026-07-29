@@ -86,7 +86,8 @@ public:
             mPFB.drawRegion(r, mDisplay,
                 [this](Painter& p, int /*bx*/, int /*by*/, int /*bw*/, int /*bh*/) {
                     for (uint16_t wi = 0; wi < mCount; wi++) {
-                        mWindows[wi]->draw(p);
+                        if (mWindows[wi]->visible())
+                            mWindows[wi]->draw(p);
                     }
                 },
                 sampleOnce);

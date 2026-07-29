@@ -3,7 +3,7 @@
 
 namespace litho {
 
-enum class TouchAction : uint8_t { DOWN = 0, MOVE = 1, UP = 2 };
+enum class TouchAction : uint8_t { DOWN = 0, MOVE = 1, UP = 2, CANCEL = 3 };
 
 struct TouchEvent {
     int         x;

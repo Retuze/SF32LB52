@@ -9,6 +9,7 @@ namespace litho {
 class ViewPropertyAnimator {
 public:
     static constexpr int kMaxProps = 4;
+    using EndCallback = void (*)(void* user);
 
     explicit ViewPropertyAnimator(View* view) : mView(view) {}
 
@@ -28,9 +29,19 @@ public:
         mInterpolator = type; return *this;
     }
 
+    ViewPropertyAnimator& withEndAction(EndCallback cb, void* user = nullptr) {
+        mEndCallback = cb;
+        mEndUser     = user;
+        return *this;
+    }
+
     void start(AnimationManager& mgr) {
-        // Cancel previously running animators
         cancel(&mgr);
+
+        if (mPropCount == 0) {
+            if (mEndCallback) mEndCallback(mEndUser);
+            return;
+        }
 
         for (int i = 0; i < mPropCount; i++) {
             auto& oa = mObjAnims[i];
@@ -40,6 +51,12 @@ public:
               .setDuration(mDuration)
               .setInterpolator(mInterpolator);
             oa.start();
+            // End action on the last property (all share the same duration).
+            if (i == mPropCount - 1 && mEndCallback) {
+                oa.animator().setEndCallback(mEndCallback, mEndUser);
+            } else {
+                oa.animator().setEndCallback(nullptr, nullptr);
+            }
             mgr.addAnimator(&oa.animator());
         }
         mActiveCount = mPropCount;
@@ -70,14 +87,16 @@ private:
         return *this;
     }
 
-    View*          mView        = nullptr;
-    AnimationManager* mManager  = nullptr;
-    PropRequest    mProps[kMaxProps];
-    ObjectAnimator mObjAnims[kMaxProps];
-    int            mPropCount   = 0;
-    int            mActiveCount = 0;
-    uint32_t       mDuration    = 300;
-    Interpolator   mInterpolator = Interpolator::LINEAR;
+    View*             mView         = nullptr;
+    AnimationManager* mManager      = nullptr;
+    PropRequest       mProps[kMaxProps];
+    ObjectAnimator    mObjAnims[kMaxProps];
+    int               mPropCount    = 0;
+    int               mActiveCount  = 0;
+    uint32_t          mDuration     = 300;
+    Interpolator      mInterpolator = Interpolator::LINEAR;
+    EndCallback       mEndCallback  = nullptr;
+    void*             mEndUser      = nullptr;
 };
 
 } // namespace litho

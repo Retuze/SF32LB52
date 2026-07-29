@@ -24,8 +24,28 @@ public:
     }
 
     void tick(uint32_t frameTimeMs) {
+        // 1) Advance all
         for (int i = 0; i < mCount; i++) {
             mAnimators[i]->onFrame(frameTimeMs);
+        }
+
+        // 2) Detach finished animators, then fire end callbacks.
+        //    End callbacks may destroy views that own the animators — so we
+        //    must not touch the list after firePendingEnd.
+        ValueAnimator* finished[kMaxAnimators];
+        int nFinished = 0;
+        for (int i = 0; i < mCount; ) {
+            if (!mAnimators[i]->isRunning()) {
+                finished[nFinished++] = mAnimators[i];
+                for (int j = i; j < mCount - 1; j++)
+                    mAnimators[j] = mAnimators[j + 1];
+                mCount--;
+            } else {
+                i++;
+            }
+        }
+        for (int i = 0; i < nFinished; i++) {
+            finished[i]->firePendingEnd();
         }
     }
 

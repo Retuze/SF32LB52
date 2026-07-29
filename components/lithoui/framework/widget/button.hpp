@@ -176,8 +176,10 @@ public:
             }
             return true;
         }
-        if (ev.action == TouchAction::UP) {
-            bool fire = mInside && mPressed;
+        if (ev.action == TouchAction::UP || ev.action == TouchAction::CANCEL) {
+            const bool fire = (ev.action == TouchAction::UP) && mInside && mPressed;
+            // Always clear pressed UI before the click side-effect (e.g. page
+            // transition), otherwise the pressed overlay sticks through the fade.
             if (mPressed || mInside) {
                 mPressed = false;
                 mInside  = false;

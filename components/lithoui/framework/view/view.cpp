@@ -5,7 +5,11 @@
 namespace litho {
 
 View::~View() {
-    delete mAnimator;
+    if (mAnimator) {
+        mAnimator->cancel();
+        delete mAnimator;
+        mAnimator = nullptr;
+    }
 }
 
 Region View::screenBounds() const {
@@ -55,6 +59,7 @@ bool View::dispatchTouchEvent(TouchEvent& ev, int screenX, int screenY) {
 
 ViewPropertyAnimator& View::animate() {
     if (mAnimator) {
+        mAnimator->cancel();
         delete mAnimator;
         mAnimator = nullptr;
     }

@@ -214,8 +214,9 @@ public:
                     const uint8_t* srow = rle + (rowOff & 0x7FFFFFFF);
                     for (int x = 0; x < copyW; x++) {
                         uint8_t g = srow[srcOffX + x];
-                        dstRow[x] = tint ? tintLut[g]
+                        uint16_t c = tint ? tintLut[g]
                             : (uint16_t)(((g >> 3) & 0x1F) << 11 | ((g >> 2) & 0x3F) << 5 | ((g >> 3) & 0x1F));
+                        dstRow[x] = (mAlpha == 255) ? c : blend565(c, dstRow[x], mAlpha);
                     }
                 } else {
                     const uint8_t* p = rle + rowOff;
@@ -236,7 +237,12 @@ public:
                             int cnt = cr - cl;
                             uint16_t c = tint ? tintLut[g]
                                 : (uint16_t)(((g >> 3) & 0x1F) << 11 | ((g >> 2) & 0x3F) << 5 | ((g >> 3) & 0x1F));
-                            wordFill32(dp, cnt, c);
+                            if (mAlpha == 255) {
+                                wordFill32(dp, cnt, c);
+                            } else {
+                                for (int i = 0; i < cnt; i++)
+                                    dp[i] = blend565(c, dp[i], mAlpha);
+                            }
                         }
                         px = runR;
                     }
@@ -259,8 +265,13 @@ public:
                 if (rowOff & 0x80000000) {
                     // Raw palette index row: 1B/px
                     const uint8_t* srow = rle + (rowOff & 0x7FFFFFFF);
-                    for (int x = 0; x < copyW; x++)
-                        dstRow[x] = pal[srow[srcOffX + x]];
+                    if (mAlpha == 255) {
+                        for (int x = 0; x < copyW; x++)
+                            dstRow[x] = pal[srow[srcOffX + x]];
+                    } else {
+                        for (int x = 0; x < copyW; x++)
+                            dstRow[x] = blend565(pal[srow[srcOffX + x]], dstRow[x], mAlpha);
+                    }
                 } else {
                     const uint8_t* p = rle + rowOff;
                     int px = 0;
@@ -276,7 +287,12 @@ public:
                         if (cr > cl) {
                             uint16_t c  = pal[ix];
                             uint16_t* dp = dstRow + (cl - visL); int cnt = cr - cl;
-                            wordFill32(dp, cnt, c);
+                            if (mAlpha == 255) {
+                                wordFill32(dp, cnt, c);
+                            } else {
+                                for (int i = 0; i < cnt; i++)
+                                    dp[i] = blend565(c, dp[i], mAlpha);
+                            }
                         }
                         px = runR;
                     }
@@ -314,7 +330,12 @@ public:
                         if (cr > cl) {
                             uint16_t c  = pal[ix];
                             uint16_t* dp = dstRow + (cl - visL); int cnt = cr - cl;
-                            wordFill32(dp, cnt, c);
+                            if (mAlpha == 255) {
+                                wordFill32(dp, cnt, c);
+                            } else {
+                                for (int i = 0; i < cnt; i++)
+                                    dp[i] = blend565(c, dp[i], mAlpha);
+                            }
                         }
                         px = runR;
                     } else {

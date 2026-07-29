@@ -1,30 +1,16 @@
 /**
  * @file main.cpp
- * @brief PC Simulator — LithoUI Gallery demo on native windowing.
- *
- * Runs the same GalleryActivity as firmware-litho (12 icons, 390×450),
- * but on the host PC using X11 (Linux) or GDI (Windows).
- *
- * Usage:
- *   simulator [path/to/res_images.bin]
- *
- * Build:
- *   cmake --preset simulator
- *   cmake --build build/simulator
+ * @brief PC Simulator — Gallery + transition effect lab.
  */
 
-// ── 1. Host compatibility layer (MUST be #1) ────────────────────
-// Defines DWT_CYCCNT before any LithoUI header includes it.
 #include "hal_stub.h"
-
-// ── 2. Resource loader ──────────────────────────────────────────
 #include "res_loader.h"
 
-// ── 3. LithoUI framework ────────────────────────────────────────
 #include "core/litho_core.h"
 #include "framework/view/view_group.hpp"
 #include "framework/window/window_manager.hpp"
 #include "framework/activity/activity_manager.hpp"
+#include "framework/activity/transition.hpp"
 #include "framework/intent/intent.hpp"
 #include "framework/widget/image.hpp"
 #include "framework/widget/text.hpp"
@@ -32,25 +18,57 @@
 #include "framework/widget/scroll.hpp"
 #include "res_images.h"
 
-// ── 4. Platform-specific port adapters ──────────────────────────
 #include "host_input.hpp"
 #include "host_tick.hpp"
 
-// ── 5. Standard libs ────────────────────────────────────────────
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 using namespace litho;
 
-// ═══════════════════════════════════════════════════════════════════
-//  Gallery Activity — same as firmware-litho/main.cpp
-// ═══════════════════════════════════════════════════════════════════
-
 static constexpr int kScreenW = 390;
 static constexpr int kScreenH = 450;
+static constexpr uint16_t kTransMs = 450;
 
-// Simple solid-color background view — makes transparency artifacts obvious
+// ── Transition catalog ───────────────────────────────────────────
+
+static TransitionSpec makeTrans(int id) {
+    switch (id) {
+    case 0:  return TransitionSpec::fade().setDuration(kTransMs);
+    case 1:  return TransitionSpec::slideFromRight().setDuration(kTransMs);
+    case 2:  return TransitionSpec::slideFromLeft().setDuration(kTransMs);
+    case 3:  return TransitionSpec::slideFromTop().setDuration(kTransMs);
+    case 4:  return TransitionSpec::slideFromBottom().setDuration(kTransMs);
+    case 5:  return TransitionSpec::pushFromRight().setDuration(kTransMs);
+    case 6:  return TransitionSpec::pushFromLeft().setDuration(kTransMs);
+    case 7:  return TransitionSpec::pushFromTop().setDuration(kTransMs);
+    case 8:  return TransitionSpec::pushFromBottom().setDuration(kTransMs);
+    case 9:  return TransitionSpec::slideFromRight().withFade().setDuration(kTransMs);
+    case 10: return TransitionSpec::slideFromBottom().withFade().setDuration(kTransMs);
+    case 11: return TransitionSpec::pushFromRight().withFade().setDuration(kTransMs);
+    case 12: return TransitionSpec::pushFromBottom().withFade().setDuration(kTransMs);
+    default: return TransitionSpec::fade().setDuration(kTransMs);
+    }
+}
+
+static const char* const kTransLabels[] = {
+    "Fade",
+    "Slide Right",
+    "Slide Left",
+    "Slide Top",
+    "Slide Bottom",
+    "Push Right",
+    "Push Left",
+    "Push Top",
+    "Push Bottom",
+    "SlideR + Fade",
+    "SlideB + Fade",
+    "PushR + Fade",
+    "PushB + Fade",
+};
+static constexpr int kTransCount = (int)(sizeof(kTransLabels) / sizeof(kTransLabels[0]));
+
 class ColorBg : public View {
 public:
     explicit ColorBg(RGB565 c) : mColor(c) {
@@ -63,6 +81,114 @@ private:
     RGB565 mColor;
 };
 
+// Demo page opened by each transition — content differs so fade/slide is obvious.
+class TransDemoActivity : public Activity {
+public:
+    void onCreate(Bundle& state) override {
+        mId = state.getInt("ti", 0);
+        if (mId < 0 || mId >= kTransCount) mId = 0;
+
+        auto* root = new ViewGroup();
+        root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        setContentView(root);
+
+        // Alternate bg so crossfade is visible against the lab page.
+        root->addView(new ColorBg(RGB565::fromRGB(20, 90, 70)));
+
+        auto* title = new TextView(kTransLabels[mId]);
+        title->setTextColor(RGB565::fromRGB(255, 230, 120));
+        title->bounds().x = 16;
+        title->bounds().y = 16;
+        root->addView(title);
+
+        auto* hint = new TextView("Demo page");
+        hint->setTextColor(RGB565::fromRGB(180, 220, 200));
+        hint->bounds().x = 16;
+        hint->bounds().y = 56;
+        root->addView(hint);
+
+        ImageId icons[] = { IMG_A_MUSIC, IMG_SETTINGS, IMG_CAMERA, IMG_WEATHER };
+        for (int i = 0; i < 4; i++) {
+            auto* iv = new ImageView(icons[i]);
+            iv->bounds().x = (int16_t)(20 + (i % 2) * 120);
+            iv->bounds().y = (int16_t)(110 + (i / 2) * 120);
+            root->addView(iv);
+        }
+
+        auto* back = new Button(RGB565::fromRGB(80, 80, 100), 120, 44);
+        back->setText("Back");
+        back->setTextColor(RGB565::White());
+        back->bounds().x = 16;
+        back->bounds().y = (int16_t)(kScreenH - 60);
+        back->setOnClick([](void* u) {
+            auto* self = (TransDemoActivity*)u;
+            self->finish(makeTrans(self->mId));
+        }, this);
+        root->addView(back);
+    }
+
+private:
+    int mId = 0;
+};
+
+// Scrollable list of all transition presets.
+class TransLabActivity : public Activity {
+public:
+    void onCreate(Bundle&) override {
+        auto* root = new ViewGroup();
+        root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        setContentView(root);
+
+        root->addView(new ColorBg(RGB565::fromRGB(35, 40, 55)));
+
+        auto* title = new TextView("Transitions");
+        title->setTextColor(RGB565::White());
+        title->bounds().x = 16;
+        title->bounds().y = 12;
+        root->addView(title);
+
+        auto* back = new Button(RGB565::fromRGB(80, 80, 100), 80, 36);
+        back->setText("Back");
+        back->setTextColor(RGB565::White());
+        back->bounds().x = (int16_t)(kScreenW - 96);
+        back->bounds().y = 8;
+        back->setOnClick([](void* u) {
+            ((TransLabActivity*)u)->finish(TransitionSpec::slideFromRight().setDuration(kTransMs));
+        }, this);
+        root->addView(back);
+
+        auto* scroll = new ScrollView();
+        scroll->bounds() = {0, 56, (int16_t)kScreenW, (int16_t)(kScreenH - 56)};
+        root->addView(scroll);
+
+        static constexpr int kBtnH = 44;
+        static constexpr int kGap  = 8;
+        for (int i = 0; i < kTransCount; i++) {
+            mClicks[i].self = this;
+            mClicks[i].id   = i;
+
+            auto* btn = new Button(RGB565::fromRGB(55, 95, 160), kScreenW - 32, kBtnH);
+            btn->setText(kTransLabels[i]);
+            btn->setTextColor(RGB565::White());
+            btn->bounds().x = 16;
+            btn->bounds().y = (int16_t)(8 + i * (kBtnH + kGap));
+            btn->setOnClick([](void* u) {
+                auto* ctx = (ClickCtx*)u;
+                Intent intent;
+                intent.target = "TransDemo";
+                intent.putInt("ti", ctx->id);
+                intent.putString("name", kTransLabels[ctx->id]);
+                ctx->self->startActivity(intent, makeTrans(ctx->id));
+            }, &mClicks[i]);
+            scroll->addView(btn);
+        }
+    }
+
+private:
+    struct ClickCtx { TransLabActivity* self; int id; };
+    ClickCtx mClicks[kTransCount] = {};
+};
+
 class GalleryActivity : public Activity {
 public:
     void onCreate(Bundle&) override {
@@ -70,7 +196,6 @@ public:
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
         setContentView(root);
 
-        // Background (renders first) — makes alpha transparency visible
         root->addView(new ColorBg(RGB565::fromRGB(40, 40, 80)));
 
         auto* title = new TextView("Hello 你好");
@@ -79,35 +204,25 @@ public:
         title->bounds().y = 8;
         root->addView(title);
 
-        auto* btn = new Button(RGB565::fromRGB(60, 120, 200), 100, 40);
-        btn->setText("设置");
+        auto* btn = new Button(RGB565::fromRGB(60, 120, 200), 120, 40);
+        btn->setText("Trans");
         btn->setTextColor(RGB565::White());
-        btn->bounds().x = 270;
+        btn->bounds().x = 250;
         btn->bounds().y = 6;
-        btn->setOnClick([](void*) {
-            printf("[btn] 设置 clicked\n");
-        }, nullptr);
+        btn->setOnClick([](void* u) {
+            auto* self = (GalleryActivity*)u;
+            Intent intent;
+            intent.target = "TransLab";
+            self->startActivity(intent, TransitionSpec::slideFromRight().setDuration(kTransMs));
+        }, this);
         root->addView(btn);
 
-        auto* btnImg = new Button();
-        btnImg->setBackgroundImage(IMG_A_MUSIC);
-        btnImg->setText("音乐");
-        btnImg->setTextColor(RGB565::White());
-        btnImg->bounds().x = 16;
-        btnImg->bounds().y = 48;
-        btnImg->setOnClick([](void*) {
-            printf("[btn] 音乐 clicked\n");
-        }, nullptr);
-        root->addView(btnImg);
-
-        // ScrollView below header — fullscreen scroll would steal button hits.
-        static constexpr int kScrollTop = 160;
+        static constexpr int kScrollTop = 60;
         auto* scroll = new ScrollView();
         scroll->bounds() = {0, (int16_t)kScrollTop,
                             (int16_t)kScreenW, (int16_t)(kScreenH - kScrollTop)};
         root->addView(scroll);
 
-        // Gallery: 12 icons, rows 1+4 are alpha (PAL_ALPHA_RLE), rows 2+3 opaque
         static constexpr int kCols  = 3, kIconW = 100, kIconH = 100;
         static constexpr int kGapX  = (kScreenW - kCols * kIconW) / (kCols + 1);
         static constexpr int kGapY  = 15, kStartY = 10;
@@ -131,21 +246,14 @@ public:
 
     void onResume() override {
         Activity::onResume();
-        mWindow->rootView()->invalidate();
+        if (mWindow && mWindow->rootView()) mWindow->rootView()->invalidate();
     }
 };
-
-// ═══════════════════════════════════════════════════════════════════
-//  entry point
-// ═══════════════════════════════════════════════════════════════════
 
 int main(int argc, char** argv)
 {
     printf("[sim] Watch Simulator — LithoUI Gallery\n");
 
-    // ── Parse args: [--dump <file.bmp>] [path/to/res_images.bin] ──
-    // --dump renders a few frames headlessly, writes the 390×450
-    // framebuffer to a BMP, and exits — no window interaction needed.
     const char* dumpPath = nullptr;
     const char* resPath  = "res_images.bin";
     bool resSet = false;
@@ -158,15 +266,11 @@ int main(int argc, char** argv)
         }
     }
 
-    // 1. Load resource bundle
     if (!ResLoader::init(resPath)) {
         fprintf(stderr, "[sim] FATAL: cannot load resource bundle.\n");
-        fprintf(stderr, "[sim] Usage: %s [--dump out.bmp] [path/to/res_images.bin]\n",
-                (argc > 0) ? argv[0] : "simulator");
         return 1;
     }
 
-    // 2. Create platform display
 #ifdef _WIN32
     GdiDisplay display;
 #else
@@ -178,28 +282,21 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // 3. Create adapters
     HostInput input(display);
     HostTick  tick;
-
-    // 4. Run LithoUI
     WindowManager wm(display, input, tick);
-
-    // PFB: 390px-wide tiles × 50px high, pool of 2
-    // (screen is only 390px wide, so each "row" is 1 tile)
     wm.initPFB(390, 50, 2);
 
     ActivityManager am(wm);
     am.registerActivity<GalleryActivity>("Gallery");
+    am.registerActivity<TransLabActivity>("TransLab");
+    am.registerActivity<TransDemoActivity>("TransDemo");
 
     Intent intent;
     intent.target = "Gallery";
     am.startActivity(intent);
 
-    // ── Headless dump mode ───────────────────────────────────────
     if (dumpPath) {
-        // Render enough frames for every PFB tile to flush (9 tiles at
-        // 390×50 cover the 450px height; a few extra frames for safety).
         for (int i = 0; i < 30; i++) {
             wm.invalidateAll();
             wm.runOnce();
@@ -210,14 +307,13 @@ int main(int argc, char** argv)
         ResLoader::shutdown();
         return ok ? 0 : 1;
 #else
-        fprintf(stderr, "[sim] --dump not implemented on this backend\n");
+        (void)dumpPath;
         ResLoader::shutdown();
         return 1;
 #endif
     }
 
-    printf("[sim] Running... (ESC or close window to quit)\n");
-    // Continuous render loop — match firmware pattern with invalidateAll + runOnce
+    printf("[sim] Trans button -> pick a transition (ESC to quit)\n");
     while (true) {
         wm.invalidateAll();
         if (!wm.runOnce()) break;

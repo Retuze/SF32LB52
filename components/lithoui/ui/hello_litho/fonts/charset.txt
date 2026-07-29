@@ -4,15 +4,17 @@
 # ASCII printable
 0020-007E
 
-# Demo CJK: 一你好世界手表设置音乐
+# Demo CJK: 一你好世界手表设置音乐返回
 4E00
 4E16
 4E50
 4F60
+56DE
 597D
 624B
 754C
 7F6E
 8868
 8BBE
+8FD4
 97F3
