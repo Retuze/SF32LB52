@@ -117,6 +117,8 @@ public:
         auto* back = new Button(RGB565::fromRGB(80, 80, 100), 120, 44);
         back->setText("Back");
         back->setTextColor(RGB565::White());
+        back->setFeedback(Button::Feedback::Ripple);
+        back->setCornerRadius(10);
         back->bounds().x = 16;
         back->bounds().y = (int16_t)(kScreenH - 60);
         back->setOnClick([](void* u) {
@@ -155,6 +157,8 @@ public:
         auto* back = new Button(RGB565::fromRGB(80, 80, 100), 80, 36);
         back->setText("Back");
         back->setTextColor(RGB565::White());
+        back->setFeedback(Button::Feedback::Ripple);
+        back->setCornerRadius(10);
         back->setOnClick([](void* u) {
             ((TransLabActivity*)u)->finish(TransitionSpec::slideFromRight().setDuration(kTransMs));
         }, this);
@@ -176,6 +180,8 @@ public:
             auto* btn = new Button(RGB565::fromRGB(55, 95, 160), 0, kBtnH);
             btn->setText(kTransLabels[i]);
             btn->setTextColor(RGB565::White());
+            btn->setFeedback(Button::Feedback::Ripple);
+            btn->setCornerRadius(12);
             btn->setOnClick([](void* u) {
                 auto* ctx = (ClickCtx*)u;
                 Intent intent;
@@ -220,6 +226,8 @@ public:
         auto* btn = new Button(RGB565::fromRGB(60, 120, 200), 120, 40);
         btn->setText("Trans");
         btn->setTextColor(RGB565::White());
+        btn->setFeedback(Button::Feedback::Ripple);
+        btn->setCornerRadius(10);
         btn->setOnClick([](void* u) {
             auto* self = (GalleryActivity*)u;
             Intent intent;

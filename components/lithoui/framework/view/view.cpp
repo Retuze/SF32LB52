@@ -20,8 +20,10 @@ Region View::screenBounds() const {
     Region r = transformedBounds();
     ViewGroup* p = mParent;
     while (p) {
-        r.x += p->bounds().x + p->translationX();
-        r.y += p->bounds().y + p->translationY();
+        // Parent layout offset is integer; parent translation may be fractional —
+        // accumulate rounded so dirty rects stay integer Regions.
+        r.x = (int16_t)(r.x + p->bounds().x + p->translationX());
+        r.y = (int16_t)(r.y + p->bounds().y + p->translationY());
         p = p->parent();
     }
     return r;
@@ -174,20 +176,18 @@ int32_t View::getChildMeasureSpec(int32_t spec, int padding, int childDimension)
     }
 }
 
-void View::setTranslationX(int16_t tx) {
-    if (tx == mTranslationX) return;
-    // Capture old screen rect before mutation, then invalidate both
-    // old and new positions so the previous frame's pixels are cleaned up.
+void View::setTranslationXQ16(int32_t txQ16) {
+    if (txQ16 == mTranslationXQ16) return;
     Region old = screenBounds();
-    mTranslationX = tx;
-    invalidate();                                // new position
-    if (mDirtyList) mDirtyList->markDirty(old);  // old position
+    mTranslationXQ16 = txQ16;
+    invalidate();
+    if (mDirtyList) mDirtyList->markDirty(old);
 }
 
-void View::setTranslationY(int16_t ty) {
-    if (ty == mTranslationY) return;
+void View::setTranslationYQ16(int32_t tyQ16) {
+    if (tyQ16 == mTranslationYQ16) return;
     Region old = screenBounds();
-    mTranslationY = ty;
+    mTranslationYQ16 = tyQ16;
     invalidate();
     if (mDirtyList) mDirtyList->markDirty(old);
 }

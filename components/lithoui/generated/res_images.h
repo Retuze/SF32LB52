@@ -5,8 +5,7 @@
 #define RES_BUNDLE_NAME    "hello_litho"
 #define RES_BUNDLE_VERSION 0x00000001
 
-#define RES_FLAG_HAS_SIN   0x0001
-#define RES_FLAG_HAS_FONTS 0x0002
+#define RES_FLAG_HAS_FONTS 0x0001
 
 typedef enum ImageId {
     IMG_G_MUSIC = 0,
@@ -34,12 +33,12 @@ typedef enum ImageId {
     IMG_A_DIAL = 22,
     IMG_A_FIND_PHONE = 23,
     IMG_A_GAME = 24,
-    IMG_A_MAP_NAVIGATION = 25,
-    IMG_A_MESSAGES = 26,
-    IMG_A_MUSIC = 27,
-    IMG_R_MIN = 28,
-    IMG_R_SEC = 29,
-    IMG_R_TEST = 30,
+    IMG_A_HAND_TEST = 25,
+    IMG_A_MAP_NAVIGATION = 26,
+    IMG_A_MESSAGES = 27,
+    IMG_A_MIN = 28,
+    IMG_A_MUSIC = 29,
+    IMG_A_SEC = 30,
     IMG_A_SETTINGS = 31,
     IMG_A_SHUTDWON = 32,
     IMG_A_SLEEP = 33,
@@ -85,7 +84,6 @@ typedef struct ImageBundleHeader {
     uint32_t version;
     uint16_t count;
     uint16_t flags;
-    uint32_t sinOffset;
     uint32_t fontsOffset;  // 0 if no font section
 } ImageBundleHeader;
 
@@ -182,28 +180,7 @@ static inline const GlyphEntry* fontFindGlyph(uint32_t codepoint) {
 static inline const void* glyphPixels(const GlyphEntry* g) {
     return g ? (const void*)(RES_IMAGE_BUNDLE + g->offset) : nullptr;
 }
-
-// Access the sin table embedded in the resource bundle.
-static inline const int16_t* resSinTable() {
-    return (const int16_t*)(RES_IMAGE_BUNDLE + resHeader()->sinOffset);
-}
-static inline int16_t sinDeg(int deg) {
-    const int16_t* t = resSinTable();
-    return t[(deg % 360 + 360) % 360];
-}
-static inline int16_t cosDeg(int deg) {
-    return sinDeg(deg + 90);
-}
-// Sub-degree sin/cos in deci-degrees (1/10 deg) via linear
-// interpolation of the per-degree table -- no extra memory,
-// enough resolution for a smooth sweeping hand.
-static inline int sinDeci(int dd) {
-    const int16_t* t = resSinTable();
-    dd = ((dd % 3600) + 3600) % 3600;
-    int d = dd / 10, f = dd % 10;
-    int s0 = t[d], s1 = t[(d + 1) % 360];
-    return s0 + (s1 - s0) * f / 10;
-}
-static inline int cosDeci(int dd) { return sinDeci(dd + 900); }
-
 #endif
+
+// Q15 sin/cos — always available (not packed into the bundle).
+#include "core/sin_table.hpp"

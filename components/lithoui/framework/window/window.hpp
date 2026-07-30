@@ -57,11 +57,11 @@ public:
     void draw(Painter& p) {
         if (!mVisible || !mRootView) return;
         // Apply root translation / scale / alpha so Activity transitions show.
-        const int ox = mRootView->translationX();
-        const int oy = mRootView->translationY();
+        const int32_t txQ = mRootView->translationXQ16();
+        const int32_t tyQ = mRootView->translationYQ16();
         const uint8_t a = mRootView->alpha();
         const uint32_t sc = mRootView->scale();
-        if (ox == 0 && oy == 0 && a == 255 && sc == View::kScaleOne) {
+        if (txQ == 0 && tyQ == 0 && a == 255 && sc == View::kScaleOne) {
             mRootView->onDraw(p);
             return;
         }
@@ -70,13 +70,20 @@ public:
         const int pivY = mRootView->height() / 2;
         const int64_t sc64 = (int64_t)sc;
         const int64_t originXFP =
-            ((int64_t)(p.screenX() + ox + pivX) << 16) - (int64_t)pivX * sc64;
+            ((int64_t)p.screenX() << 16) + (int64_t)txQ
+            + (((int64_t)pivX << 16) - (int64_t)pivX * sc64);
         const int64_t originYFP =
-            ((int64_t)(p.screenY() + oy + pivY) << 16) - (int64_t)pivY * sc64;
+            ((int64_t)p.screenY() << 16) + (int64_t)tyQ
+            + (((int64_t)pivY << 16) - (int64_t)pivY * sc64);
         Painter cp = p;
         cp.setScreenOriginFP(originXFP, originYFP);
         cp.setScale(sc);
         cp.setAlpha((uint8_t)((uint32_t)p.alpha() * a / 255));
+        // Soft clip expanded for fractional translation.
+        Region tb = mRootView->transformedBounds();
+        cp.setScreenClip(p.screenX() + tb.x, p.screenY() + tb.y,
+                         p.screenX() + tb.x + tb.width,
+                         p.screenY() + tb.y + tb.height);
         mRootView->onDraw(cp);
     }
 

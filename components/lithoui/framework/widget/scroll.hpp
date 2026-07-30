@@ -104,46 +104,34 @@ public:
             Region tb = child->transformedBounds();
 
             const uint32_t sc = p.scale();
-            int sx, sy, sr, sb;
-            if (sc == Painter::kScaleOne) {
-                sx = p.screenX() + tb.x;
-                sy = p.screenY() + tb.y + mScroll;
-                sr = sx + tb.width;
-                sb = sy + tb.height;
-            } else {
-                int ly = tb.y + mScroll;
-                int64_t cx = p.originXFP() + (int64_t)tb.x * (int64_t)sc;
-                int64_t cy = p.originYFP() + (int64_t)ly * (int64_t)sc;
-                int64_t cr = p.originXFP() + (int64_t)(tb.x + tb.width) * (int64_t)sc;
-                int64_t cb = p.originYFP() + (int64_t)(ly + tb.height) * (int64_t)sc;
-                sx = Painter::roundFP(cx);
-                sy = Painter::roundFP(cy);
-                sr = Painter::roundFP(cr);
-                sb = Painter::roundFP(cb);
-                if (sr <= sx) sr = sx + 1;
-                if (sb <= sy) sb = sy + 1;
+            const int64_t sc64 = (int64_t)sc;
+            const int64_t vx = child->visualXFP();
+            const int64_t vy = child->visualYFP() + ((int64_t)mScroll << 16);
+            int64_t cx = p.originXFP() + ((vx * sc64) >> 16);
+            int64_t cy = p.originYFP() + ((vy * sc64) >> 16);
+            int64_t cr = cx + ((int64_t)child->width()  * sc64);
+            int64_t cb = cy + ((int64_t)child->height() * sc64);
 
-                if (!p.intersectsClip(sx, sy, sr, sb)) continue;
-
-                uint8_t ca = child->alpha();
-                Painter cp = p;
-                cp.setScreenOriginFP(cx, cy);
-                cp.setScreenClip(sx, sy, sr, sb);
-                cp.setScale(sc);
-                cp.setAlpha((uint8_t)((uint32_t)pa * ca / 255));
-                child->onDraw(cp);
-                continue;
-            }
-
+            int sx = Painter::roundFP(cx);
+            int sy = Painter::roundFP(cy);
+            int sr = Painter::roundFP(cr);
+            int sb = Painter::roundFP(cb);
+            if (sr <= sx) sr = sx + 1;
+            if (sb <= sy) sb = sy + 1;
             if (!p.intersectsClip(sx, sy, sr, sb)) continue;
 
             uint8_t ca = child->alpha();
-            // Always apply origin when scrolled — (0,0) fast path would skip offset.
-            if (ca == 255 && pa == 255 && tb.x == 0 && tb.y == 0 && mScroll == 0) {
+            const bool identity =
+                sc == Painter::kScaleOne && mScroll == 0
+                && ca == 255 && pa == 255
+                && tb.x == 0 && tb.y == 0
+                && child->translationXQ16() == 0 && child->translationYQ16() == 0
+                && ((p.originXFP() | p.originYFP()) & (int64_t)0xFFFF) == 0;
+            if (identity) {
                 child->onDraw(p);
             } else {
                 Painter cp = p;
-                cp.setScreenOrigin(sx, sy);
+                cp.setScreenOriginFP(cx, cy);
                 cp.setScreenClip(sx, sy, sr, sb);
                 cp.setScale(sc);
                 cp.setAlpha((uint8_t)((uint32_t)pa * ca / 255));

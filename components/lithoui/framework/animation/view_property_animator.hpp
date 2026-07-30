@@ -14,10 +14,12 @@ public:
     explicit ViewPropertyAnimator(View* view) : mView(view) {}
 
     ViewPropertyAnimator& translationX(float to) {
-        return addProp((float)mView->translationX(), to, viewSetTranslationX);
+        return addProp((float)mView->translationXQ16() / (float)View::kTransOne,
+                       to, viewSetTranslationX);
     }
     ViewPropertyAnimator& translationY(float to) {
-        return addProp((float)mView->translationY(), to, viewSetTranslationY);
+        return addProp((float)mView->translationYQ16() / (float)View::kTransOne,
+                       to, viewSetTranslationY);
     }
     ViewPropertyAnimator& alpha(float to) {
         return addProp((float)mView->alpha(), to, viewSetAlpha);

@@ -19,7 +19,7 @@ def read_bundle(path):
     with open(path, "rb") as f:
         data = f.read()
 
-    magic, ver, count, flags, sinOff = struct.unpack_from("<4sIHHI", data, 0)
+    magic, ver, count, flags, fontsOff = struct.unpack_from("<4sIHHI", data, 0)
     assert magic == b"LIMB", f"Bad magic: {magic}"
 
     entries = []

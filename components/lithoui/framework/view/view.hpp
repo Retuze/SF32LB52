@@ -29,8 +29,13 @@ public:
     int measuredHeight() const { return mMeasuredHeight; }
 
     // Animated visual properties
-    int16_t  translationX() const { return mTranslationX; }
-    int16_t  translationY() const { return mTranslationY; }
+    // Translation is 16.16 fixed-point (same unit as scale): 65536 = 1px.
+    // Pixel getters round-to-nearest for hit-test / integer layout math.
+    static constexpr int32_t kTransOne = 65536;
+    int32_t translationXQ16() const { return mTranslationXQ16; }
+    int32_t translationYQ16() const { return mTranslationYQ16; }
+    int     translationX() const { return roundTrans(mTranslationXQ16); }
+    int     translationY() const { return roundTrans(mTranslationYQ16); }
     uint8_t  alpha()        const { return mAlpha; }
     // Fixed-point scale: kScaleOne (65536) = 1.0 (16.16). Higher precision
     // than 8.8 avoids 1–2px snapping of child positions during scale anims.
@@ -39,14 +44,27 @@ public:
 
     // Setters invalidate both old and new screen rects to prevent ghosting
     // during animation. Alpha changes only need single invalidate (no motion).
-    void setTranslationX(int16_t tx);
-    void setTranslationY(int16_t ty);
+    void setTranslationXQ16(int32_t txQ16);
+    void setTranslationYQ16(int32_t tyQ16);
+    void setTranslationX(int tx) { setTranslationXQ16((int32_t)tx * kTransOne); }
+    void setTranslationY(int ty) { setTranslationYQ16((int32_t)ty * kTransOne); }
     void setAlpha(uint8_t a)         { mAlpha = a; invalidate(); }
     void setScale(uint32_t s);
 
     // Round local → scaled pixels: (x * scale + 0.5) in 16.16.
     static inline int applyScale(int x, uint32_t s) {
         return (int)(((int64_t)x * (int64_t)s + 32768) >> 16);
+    }
+    static inline int roundTrans(int32_t q16) {
+        return (int)((q16 + (q16 >= 0 ? 32768 : -32768)) >> 16);
+    }
+
+    // Layout position + translation in 16.16 (parent-relative).
+    int64_t visualXFP() const {
+        return ((int64_t)mBounds.x << 16) + (int64_t)mTranslationXQ16;
+    }
+    int64_t visualYFP() const {
+        return ((int64_t)mBounds.y << 16) + (int64_t)mTranslationYQ16;
     }
 
     ViewPropertyAnimator& animate();
@@ -103,24 +121,36 @@ public:
     }
 
     // Local-space bounds including all transforms (translation, scale).
-    // Default: mBounds shifted by translation; scale expands about center.
-    // Used by screenBounds() and ViewGroup clip.
+    // Integer AABB covering the visual (ceil-expanded when translation has frac).
+    // Used by screenBounds() and ViewGroup clip / dirty.
     virtual Region transformedBounds() const {
-        int16_t x = static_cast<int16_t>(mBounds.x + mTranslationX);
-        int16_t y = static_cast<int16_t>(mBounds.y + mTranslationY);
-        int16_t w = mBounds.width;
-        int16_t h = mBounds.height;
-        if (mScale != kScaleOne && w > 0 && h > 0) {
-            int sw = applyScale(w, mScale);
-            int sh = applyScale(h, mScale);
+        int64_t x0FP = visualXFP();
+        int64_t y0FP = visualYFP();
+        int64_t x1FP = x0FP + ((int64_t)mBounds.width  << 16);
+        int64_t y1FP = y0FP + ((int64_t)mBounds.height << 16);
+        if (mScale != kScaleOne && mBounds.width > 0 && mBounds.height > 0) {
+            int sw = applyScale(mBounds.width, mScale);
+            int sh = applyScale(mBounds.height, mScale);
             if (sw < 1) sw = 1;
             if (sh < 1) sh = 1;
-            x = (int16_t)(x + (w - sw) / 2);
-            y = (int16_t)(y + (h - sh) / 2);
-            w = (int16_t)sw;
-            h = (int16_t)sh;
+            // Scale about visual center.
+            int64_t cx = (x0FP + x1FP) / 2;
+            int64_t cy = (y0FP + y1FP) / 2;
+            x0FP = cx - ((int64_t)sw << 15);
+            y0FP = cy - ((int64_t)sh << 15);
+            x1FP = x0FP + ((int64_t)sw << 16);
+            y1FP = y0FP + ((int64_t)sh << 16);
         }
-        return {x, y, w, h};
+        // Floor left/top, ceil right/bottom so fractional translation is covered.
+        int x = (int)(x0FP >> 16);
+        int y = (int)(y0FP >> 16);
+        int r = (int)((x1FP + 0xFFFF) >> 16);
+        int b = (int)((y1FP + 0xFFFF) >> 16);
+        int w = r - x;
+        int h = b - y;
+        if (w < 0) w = 0;
+        if (h < 0) h = 0;
+        return {(int16_t)x, (int16_t)y, (int16_t)w, (int16_t)h};
     }
 
     // Compute screen-space rectangle for this view (bounds + translation,
@@ -178,12 +208,12 @@ protected:
     bool         mLayoutRequested = true; // first frame lays out
     RGB565       mBgColor       = {};
     RGB565       mBorderColor   = {};
-    int16_t      mTranslationX  = 0;
-    int16_t      mTranslationY  = 0;
     int16_t      mPadL = 0, mPadT = 0, mPadR = 0, mPadB = 0;
     int16_t      mBorderL = 0, mBorderT = 0, mBorderR = 0, mBorderB = 0;
     uint8_t      mAlpha         = 255;
     uint32_t     mScale         = kScaleOne;
+    int32_t      mTranslationXQ16 = 0;
+    int32_t      mTranslationYQ16 = 0;
     int          mMeasuredWidth  = 0;
     int          mMeasuredHeight = 0;
     ViewGroup*   mParent        = nullptr;
@@ -196,12 +226,16 @@ private:
     static uint32_t sFrameTimeMs;
 };
 
-// View property setters for ObjectAnimator
+// View property setters for ObjectAnimator (translation values are in pixels).
 inline void viewSetTranslationX(void* target, float val) {
-    ((View*)target)->setTranslationX((int16_t)val);
+    if (val > 32767.f) val = 32767.f;
+    if (val < -32768.f) val = -32768.f;
+    ((View*)target)->setTranslationXQ16((int32_t)(val * (float)View::kTransOne));
 }
 inline void viewSetTranslationY(void* target, float val) {
-    ((View*)target)->setTranslationY((int16_t)val);
+    if (val > 32767.f) val = 32767.f;
+    if (val < -32768.f) val = -32768.f;
+    ((View*)target)->setTranslationYQ16((int32_t)(val * (float)View::kTransOne));
 }
 inline void viewSetAlpha(void* target, float val) {
     ((View*)target)->setAlpha((uint8_t)val);

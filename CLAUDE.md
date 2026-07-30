@@ -277,7 +277,8 @@ python components/lithoui/tools/pack_res.py components/lithoui/ui/hello_litho co
 | `tint/` | `G_` | FMT_A8_RLE (0) | 灰度图，运行时 tint 着色 |
 | `solid/` | (无) | FMT_PAL_RLE (1) 或 FMT_RGB565_RLE (3) | 不透明图 |
 | `alpha/` | `A_` | FMT_PAL_ALPHA_RLE (2) 或 FMT_RGB565A_RLE (4) | 带透明度 |
-| `alpha/r_*.png` | `R_` | 同上 | 可旋转 (自动触发 sin 表) |
+
+任意图片都可通过 `ImageView::setRotationAngle` 旋转（sin 表在 `core/sin_table.hpp`）。
 
 `ImageView::onDraw` 按 `e->formatInfo` 获取 format + paletteBits，`Painter::drawImage` 内部 `LITHO_FORMAT(fmt)` 分派到 5 个解码路径。
 alpha 内联在 RLE 流中，无独立 `imageAlpha()` 平面。

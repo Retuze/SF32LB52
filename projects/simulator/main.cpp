@@ -18,6 +18,8 @@
 #include "framework/widget/text.hpp"
 #include "framework/widget/button.hpp"
 #include "framework/widget/scroll.hpp"
+#include "framework/widget/slider.hpp"
+#include "framework/widget/arc_text.hpp"
 #include "res_images.h"
 
 #include "host_input.hpp"
@@ -122,6 +124,8 @@ public:
         auto* back = new Button(RGB565::fromRGB(80, 80, 100), 120, 44);
         back->setText("Back");
         back->setTextColor(RGB565::White());
+        back->setFeedback(Button::Feedback::Ripple);
+        back->setCornerRadius(10);
         back->bounds().x = 16;
         back->bounds().y = (int16_t)(kScreenH - 60);
         back->setOnClick([](void* u) {
@@ -162,6 +166,8 @@ public:
         auto* back = new Button(RGB565::fromRGB(80, 80, 100), 80, 36);
         back->setText("Back");
         back->setTextColor(RGB565::White());
+        back->setFeedback(Button::Feedback::Ripple);
+        back->setCornerRadius(10);
         back->setOnClick([](void* u) {
             ((TransLabActivity*)u)->finish(TransitionSpec::slideFromRight().setDuration(kTransMs));
         }, this);
@@ -183,6 +189,8 @@ public:
             auto* btn = new Button(RGB565::fromRGB(55, 95, 160), 0, kBtnH);
             btn->setText(kTransLabels[i]);
             btn->setTextColor(RGB565::White());
+            btn->setFeedback(Button::Feedback::Ripple);
+            btn->setCornerRadius(12);
             btn->setOnClick([](void* u) {
                 auto* ctx = (ClickCtx*)u;
                 Intent intent;
@@ -227,6 +235,8 @@ public:
         auto* btn = new Button(RGB565::fromRGB(60, 120, 200), 120, 40);
         btn->setText("Trans");
         btn->setTextColor(RGB565::White());
+        btn->setFeedback(Button::Feedback::Ripple);
+        btn->setCornerRadius(10);
         btn->setOnClick([](void* u) {
             auto* self = (GalleryActivity*)u;
             Intent intent;
@@ -238,11 +248,75 @@ public:
             .margins(0, 0, 16, 0));
         root->addView(header, MP, 56);
 
+        // SDF AA tuner — softAaHalfPx in [0, 3], default 0.5.
+        auto* aaBox = new LinearLayout(LinearLayout::VERTICAL);
+        aaBox->setPadding(16, 4, 16, 8);
+        aaBox->setBackgroundColor(RGB565::fromRGB(30, 30, 55));
+
+        mAaLabel = new TextView("");
+        mAaLabel->setTextColor(RGB565::fromRGB(200, 210, 255));
+        updateAaLabel(Painter::softAaHalfPx());
+        aaBox->addView(mAaLabel, MP, WC);
+
+        auto* slider = new Slider();
+        slider->setRange(0.f, 3.f);
+        slider->setValue(Painter::softAaHalfPx());
+        slider->setOnChange([](float v, void* u) {
+            auto* self = (GalleryActivity*)u;
+            Painter::setSoftAaHalfPx(v);
+            self->updateAaLabel(v);
+            if (self->mWindow && self->mWindow->rootView())
+                self->mWindow->rootView()->invalidate();
+        }, this);
+        aaBox->addView(slider, MP, 40);
+
+        auto* preview = new LinearLayout(LinearLayout::HORIZONTAL);
+        preview->setGap(10);
+        preview->setPadding(0, 8, 0, 0);
+        static const int kPrevR[] = { 6, 12, 20 };
+        for (int i = 0; i < 3; i++) {
+            auto* pb = new Button(RGB565::fromRGB(55, 95, 160), 0, 40);
+            char buf[16];
+            snprintf(buf, sizeof(buf), "r=%d", kPrevR[i]);
+            pb->setText(buf);
+            pb->setTextColor(RGB565::White());
+            pb->setFeedback(Button::Feedback::Ripple);
+            pb->setCornerRadius((int16_t)kPrevR[i]);
+            preview->addView(pb, 0, 40, 1.f);
+        }
+        aaBox->addView(preview, MP, 48);
+        root->addView(aaBox, MP, WC);
+
         static constexpr int kCols  = 3, kIconW = 100, kIconH = 100;
         static constexpr int kGapX  = (kScreenW - kCols * kIconW) / (kCols + 1);
         static constexpr int kGapY  = 15, kStartY = 10;
 
         auto* scroll = new ScrollView();
+        auto* scrollCol = new LinearLayout(LinearLayout::VERTICAL);
+
+        // Arc text demo inside scroll — needs full intrinsic height (radius+pad);
+        // if left as a root sibling it gets AT_MOST-squeezed and H clips under the label.
+        auto* arcBox = new LinearLayout(LinearLayout::VERTICAL);
+        arcBox->setPadding(8, 8, 8, 16);
+        arcBox->setBackgroundColor(RGB565::fromRGB(20, 28, 40));
+        auto* arcLabel = new TextView("ArcTextView");
+        arcLabel->setTextColor(RGB565::fromRGB(160, 200, 255));
+        arcBox->addView(arcLabel, MP, WC);
+
+        // Full ring once; radius kept small enough that arcBox fits in the
+        // scroll viewport (otherwise ScrollView clips the bottom at rest).
+        auto* arc = new ArcTextView("HELLO*LITHO");
+        arc->setRadius(64);
+        arc->setStartAngle(270);
+        arc->setClockwise(true);
+        arc->setReadableFromOutside(true);
+        arc->setLetterSpacing(3);
+        arc->setTextColor(RGB565::fromRGB(255, 220, 120));
+        arc->setSpinDegreesPerSec(40);
+        arc->setSpinning(true);
+        arcBox->addView(arc, Lp(WC, WC).gravity(Gravity::CENTER_H));
+        scrollCol->addView(arcBox, MP, WC);
+
         auto* grid = new GridLayout(kCols);
         grid->setGap(kGapX, kGapY);
         grid->setPadding(kGapX, kStartY, kGapX, kStartY);
@@ -258,7 +332,8 @@ public:
             auto* iv = new ImageView(icons[i]);
             grid->addView(iv, kIconW, kIconH);
         }
-        scroll->addView(grid, MP, WC);
+        scrollCol->addView(grid, MP, WC);
+        scroll->addView(scrollCol, MP, WC);
         root->addView(scroll, MP, 0, 1.f);
     }
 
@@ -266,6 +341,22 @@ public:
         Activity::onResume();
         if (mWindow && mWindow->rootView()) mWindow->rootView()->invalidate();
     }
+
+    void updateAaLabel(float px) {
+        if (!mAaLabel) return;
+        char buf[48];
+        int whole = (int)px;
+        int frac = (int)(px * 100.f + 0.5f) % 100;
+        int softW = (int)(px * 200.f + 0.5f);
+        int softWhole = softW / 100;
+        int softFrac = softW % 100;
+        snprintf(buf, sizeof(buf), "SDF AA half %d.%02dpx  (edge ~%d.%02dpx)",
+                 whole, frac, softWhole, softFrac);
+        mAaLabel->setText(buf);
+    }
+
+private:
+    TextView* mAaLabel = nullptr;
 };
 
 int main(int argc, char** argv)

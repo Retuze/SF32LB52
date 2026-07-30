@@ -153,9 +153,9 @@ def main():
     out_dir.mkdir(exist_ok=True)
 
     data = bin_path.read_bytes()
-    magic, ver, count, flags, sinOff = struct.unpack_from("<4sIHHI", data, 0)
+    magic, ver, count, flags, fontsOff = struct.unpack_from("<4sIHHI", data, 0)
     assert magic == b"LIMB", f"bad magic {magic!r}"
-    print(f"bundle: {bin_path.name}  ver={ver:#x} count={count} flags={flags:#x} sinOff={sinOff}")
+    print(f"bundle: {bin_path.name}  ver={ver:#x} count={count} flags={flags:#x} fontsOff={fontsOff}")
 
     # enum names from res_images.h (for filenames)
     names = {}

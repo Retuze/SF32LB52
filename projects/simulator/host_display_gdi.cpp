@@ -147,6 +147,7 @@ LRESULT GdiDisplay::wndProc(UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
 
     case WM_LBUTTONDOWN:
+        SetCapture(mHwnd);
         mButtonDown = true;
         mLatestTouch.type = EventType::TOUCH;
         mLatestTouch.touch.action = TouchAction::DOWN;
@@ -156,6 +157,7 @@ LRESULT GdiDisplay::wndProc(UINT msg, WPARAM wp, LPARAM lp)
         return 0;
 
     case WM_LBUTTONUP:
+        if (GetCapture() == mHwnd) ReleaseCapture();
         mButtonDown = false;
         mLatestTouch.type = EventType::TOUCH;
         mLatestTouch.touch.action = TouchAction::UP;
@@ -166,10 +168,35 @@ LRESULT GdiDisplay::wndProc(UINT msg, WPARAM wp, LPARAM lp)
 
     case WM_MOUSEMOVE:
         if (mButtonDown) {
+            const int px = GET_X_LPARAM(lp);
+            const int py = GET_Y_LPARAM(lp);
+            // Dragging outside the client area = finger lift (no click).
+            if (px < 0 || py < 0 || px >= mWinW || py >= mWinH) {
+                if (GetCapture() == mHwnd) ReleaseCapture();
+                mButtonDown = false;
+                mLatestTouch.type = EventType::TOUCH;
+                mLatestTouch.touch.action = TouchAction::CANCEL;
+                mLatestTouch.touch.x = px / mScale;
+                mLatestTouch.touch.y = py / mScale;
+                mHasTouch = true;
+                return 0;
+            }
             mLatestTouch.type = EventType::TOUCH;
             mLatestTouch.touch.action = TouchAction::MOVE;
-            mLatestTouch.touch.x = GET_X_LPARAM(lp) / mScale;
-            mLatestTouch.touch.y = GET_Y_LPARAM(lp) / mScale;
+            mLatestTouch.touch.x = px / mScale;
+            mLatestTouch.touch.y = py / mScale;
+            mHasTouch = true;
+        }
+        return 0;
+
+    case WM_CAPTURECHANGED:
+        // Lost capture (Alt-Tab, etc.) while pressed → cancel gesture.
+        if (mButtonDown && (HWND)lp != mHwnd) {
+            mButtonDown = false;
+            mLatestTouch.type = EventType::TOUCH;
+            mLatestTouch.touch.action = TouchAction::CANCEL;
+            mLatestTouch.touch.x = 0;
+            mLatestTouch.touch.y = 0;
             mHasTouch = true;
         }
         return 0;

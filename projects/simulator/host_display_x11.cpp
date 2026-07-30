@@ -100,6 +100,11 @@ void X11Display::pumpEvents()
         case ButtonPress:
             if (xev.xbutton.button == Button1) {
                 mButtonDown = true;
+                XGrabPointer(mDisplay, mWindow, False,
+                             ButtonPressMask | ButtonReleaseMask |
+                             PointerMotionMask | LeaveWindowMask,
+                             GrabModeAsync, GrabModeAsync,
+                             None, None, CurrentTime);
                 ev.type = EventType::TOUCH;
                 ev.touch.action = TouchAction::DOWN;
                 ev.touch.x = xev.xbutton.x;
@@ -110,6 +115,8 @@ void X11Display::pumpEvents()
 
         case ButtonRelease:
             if (xev.xbutton.button == Button1) {
+                if (mButtonDown)
+                    XUngrabPointer(mDisplay, CurrentTime);
                 mButtonDown = false;
                 ev.type = EventType::TOUCH;
                 ev.touch.action = TouchAction::UP;
@@ -121,10 +128,33 @@ void X11Display::pumpEvents()
 
         case MotionNotify:
             if (mButtonDown) {
+                if (xev.xmotion.x < 0 || xev.xmotion.y < 0 ||
+                    xev.xmotion.x >= mWidth || xev.xmotion.y >= mHeight) {
+                    XUngrabPointer(mDisplay, CurrentTime);
+                    mButtonDown = false;
+                    ev.type = EventType::TOUCH;
+                    ev.touch.action = TouchAction::CANCEL;
+                    ev.touch.x = xev.xmotion.x;
+                    ev.touch.y = xev.xmotion.y;
+                    pushEvent(ev);
+                } else {
+                    ev.type = EventType::TOUCH;
+                    ev.touch.action = TouchAction::MOVE;
+                    ev.touch.x = xev.xmotion.x;
+                    ev.touch.y = xev.xmotion.y;
+                    pushEvent(ev);
+                }
+            }
+            break;
+
+        case LeaveNotify:
+            if (mButtonDown) {
+                XUngrabPointer(mDisplay, CurrentTime);
+                mButtonDown = false;
                 ev.type = EventType::TOUCH;
-                ev.touch.action = TouchAction::MOVE;
-                ev.touch.x = xev.xmotion.x;
-                ev.touch.y = xev.xmotion.y;
+                ev.touch.action = TouchAction::CANCEL;
+                ev.touch.x = xev.xcrossing.x;
+                ev.touch.y = xev.xcrossing.y;
                 pushEvent(ev);
             }
             break;
@@ -213,7 +243,7 @@ bool X11Display::init(int w, int h)
     XSelectInput(mDisplay, mWindow,
                  ExposureMask | StructureNotifyMask |
                  ButtonPressMask | ButtonReleaseMask |
-                 PointerMotionMask |
+                 PointerMotionMask | LeaveWindowMask |
                  KeyPressMask | KeyReleaseMask);
 
     XMapWindow(mDisplay, mWindow);

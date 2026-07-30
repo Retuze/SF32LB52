@@ -77,6 +77,20 @@ private:
         int weightedCount = 0;
         int childCountVis = 0;
 
+        // Detect weighted siblings first — then non-weight WRAP kids can be
+        // measured against the full parent budget (heightUsed=0). Otherwise the
+        // last non-weight child gets unfairly AT_MOST-squeezed by earlier ones.
+        for (uint16_t i = 0; i < childCount(); i++) {
+            View* child = childAt(i);
+            if (!child || !child->visible()) continue;
+            litho::LayoutParams* base = child->layoutParams();
+            if (base && base->weight > 0.f) {
+                totalWeight += base->weight;
+                weightedCount++;
+            }
+        }
+        const bool hasWeight = totalWeight > 0.f;
+
         // Pass 1: measure non-weight children; skip weight size on main axis.
         for (uint16_t i = 0; i < childCount(); i++) {
             View* child = childAt(i);
@@ -91,8 +105,6 @@ private:
             int mb = base ? base->marginB : 0;
 
             if (wgt > 0.f) {
-                totalWeight += wgt;
-                weightedCount++;
                 // Measure with UNSPECIFIED height so WRAP can report intrinsic;
                 // weighted size assigned in pass 2.
                 int heightDim = base ? base->height : LayoutParams::WRAP_CONTENT;
@@ -104,7 +116,10 @@ private:
                     MeasureSpec::make(0, MeasureSpec::UNSPECIFIED));
                 totalLength += mt + mb; // weight child contributes margins only for now
             } else {
-                measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, totalLength);
+                // With a weight sibling, don't subtract earlier siblings' height from
+                // AT_MOST — they share the parent and weight eats the remainder.
+                int used = hasWeight ? 0 : totalLength;
+                measureChildWithMargins(child, widthMeasureSpec, 0, heightMeasureSpec, used);
                 totalLength += child->measuredHeight() + mt + mb;
             }
 
@@ -188,6 +203,15 @@ private:
         for (uint16_t i = 0; i < childCount(); i++) {
             View* child = childAt(i);
             if (!child || !child->visible()) continue;
+            litho::LayoutParams* base = child->layoutParams();
+            if (base && base->weight > 0.f)
+                totalWeight += base->weight;
+        }
+        const bool hasWeight = totalWeight > 0.f;
+
+        for (uint16_t i = 0; i < childCount(); i++) {
+            View* child = childAt(i);
+            if (!child || !child->visible()) continue;
             childCountVis++;
 
             litho::LayoutParams* base = child->layoutParams();
@@ -198,7 +222,6 @@ private:
             int mb = base ? base->marginB : 0;
 
             if (wgt > 0.f) {
-                totalWeight += wgt;
                 child->measure(
                     MeasureSpec::make(0, MeasureSpec::UNSPECIFIED),
                     getChildMeasureSpec(heightMeasureSpec,
@@ -206,7 +229,8 @@ private:
                         base ? base->height : LayoutParams::WRAP_CONTENT));
                 totalLength += ml + mr;
             } else {
-                measureChildWithMargins(child, widthMeasureSpec, totalLength, heightMeasureSpec, 0);
+                int used = hasWeight ? 0 : totalLength;
+                measureChildWithMargins(child, widthMeasureSpec, used, heightMeasureSpec, 0);
                 totalLength += child->measuredWidth() + ml + mr;
             }
             int ch = child->measuredHeight() + mt + mb;

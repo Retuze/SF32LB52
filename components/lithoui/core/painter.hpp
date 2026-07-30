@@ -160,6 +160,21 @@ public:
     void setAlpha(uint8_t a) { mAlpha = a; }
     uint8_t alpha() const { return mAlpha; }
 
+    // SDF / soft-edge AA half-width in Q8 (256 = 1.0px). Default 128 (0.5px).
+    // Total filter ≈ 2 * half. 0 = hard edges.
+    static void setSoftAaHalfQ8(int q8) {
+        if (q8 < 0) q8 = 0;
+        if (q8 > 1024) q8 = 1024; // cap ~4px half
+        sSoftAaHalfQ8 = q8;
+    }
+    static int softAaHalfQ8() { return sSoftAaHalfQ8; }
+    static float softAaHalfPx() { return (float)sSoftAaHalfQ8 / 256.f; }
+    static void setSoftAaHalfPx(float px) {
+        if (px < 0.f) px = 0.f;
+        if (px > 4.f) px = 4.f;
+        setSoftAaHalfQ8((int)(px * 256.f + 0.5f));
+    }
+
     bool intersectsClip(int left, int top, int right, int bottom) const {
         return left < mClipR && right > mClipL &&
                top  < mClipB && bottom > mClipT;
@@ -179,19 +194,21 @@ public:
     void fillRect(int x, int y, int w, int h, RGB565 c) {
         if (!mTile || !mTile->buffer() || w <= 0 || h <= 0) return;
 
-        // Logical → screen (scale about painter origin)
+        // Logical → screen. Use FP whenever scale≠1 or origin has a fractional pixel
+        // (subpixel translation from parent) so positions don't snap early.
         int sx0, sy0, sx1, sy1;
-        if (mScale == kScaleOne) {
+        const bool fracOrigin = ((mOriginXFP | mOriginYFP) & (int64_t)0xFFFF) != 0;
+        if (mScale == kScaleOne && !fracOrigin) {
             sx0 = x + mScreenX;
             sy0 = y + mScreenY;
             sx1 = sx0 + w;
             sy1 = sy0 + h;
         } else {
-            // From FP origin so siblings share unrounded parent position.
-            sx0 = roundFP(mOriginXFP + (int64_t)x * mScale);
-            sy0 = roundFP(mOriginYFP + (int64_t)y * mScale);
-            sx1 = roundFP(mOriginXFP + (int64_t)(x + w) * mScale);
-            sy1 = roundFP(mOriginYFP + (int64_t)(y + h) * mScale);
+            const int64_t s = (mScale == kScaleOne) ? (int64_t)kScaleOne : (int64_t)mScale;
+            sx0 = roundFP(mOriginXFP + (int64_t)x * s);
+            sy0 = roundFP(mOriginYFP + (int64_t)y * s);
+            sx1 = roundFP(mOriginXFP + (int64_t)(x + w) * s);
+            sy1 = roundFP(mOriginYFP + (int64_t)(y + h) * s);
             if (sx1 <= sx0) sx1 = sx0 + 1;
             if (sy1 <= sy0) sy1 = sy0 + 1;
         }
@@ -244,6 +261,500 @@ public:
             }
         }
     }
+
+    // Filled circle with soft AA rim (~2.5px). Optional round-rect mask.
+    __attribute__((noinline, section(".ramfunc")))
+    void fillCircle(int cx, int cy, int radius, RGB565 c,
+                    int clipX = 0, int clipY = 0, int clipW = 0, int clipH = 0,
+                    int clipRadius = 0) {
+        if (!mTile || !mTile->buffer() || radius <= 0) return;
+
+        const uint8_t a0 = mAlpha;
+        const int aaHalfQ8 = softAaHalfQ8();
+        const int aaSpan   = aaHalfQ8 * 2;
+        if (aaSpan <= 0) {
+            // Hard fill fallback
+            const int r2 = radius * radius;
+            for (int dy = -radius; dy <= radius; dy++) {
+                int remain = r2 - dy * dy;
+                if (remain < 0) continue;
+                int lo = 0, hi = radius, dx = 0;
+                while (lo <= hi) {
+                    int mid = (lo + hi) >> 1;
+                    if (mid * mid <= remain) { dx = mid; lo = mid + 1; }
+                    else hi = mid - 1;
+                }
+                fillRect(cx - dx, cy + dy, dx * 2 + 1, 1, c);
+            }
+            return;
+        }
+        const int rQ8      = radius << 8;
+        const bool mask    = (clipW > 0 && clipH > 0);
+        const int pad      = (aaHalfQ8 + 255) >> 8;
+        const int y0 = cy - radius - pad;
+        const int y1 = cy + radius + pad;
+        const int xMin = cx - radius - pad;
+        const int xMax = cx + radius + pad;
+
+        for (int y = y0; y <= y1; y++) {
+            int run0 = -1;
+            for (int x = xMin; x <= xMax; ) {
+                const int dxQ8 = ((x - cx) << 8) + 128;
+                const int dyQ8 = ((y - cy) << 8) + 128;
+                int dist = (int)isqrt64((uint64_t)(int64_t)dxQ8 * (int64_t)dxQ8 +
+                                       (uint64_t)(int64_t)dyQ8 * (int64_t)dyQ8);
+                int cov = aaHalfQ8 - (dist - rQ8);
+                if (cov <= 0) {
+                    if (run0 >= 0) {
+                        mAlpha = a0;
+                        fillRect(run0, y, x - run0, 1, c);
+                        run0 = -1;
+                    }
+                    x++;
+                    continue;
+                }
+                if (cov > aaSpan) cov = aaSpan;
+
+                if (mask) {
+                    int ly = y - clipY;
+                    int lx = x - clipX;
+                    if (ly < 0 || ly >= clipH || lx < 0 || lx >= clipW) {
+                        if (run0 >= 0) {
+                            mAlpha = a0;
+                            fillRect(run0, y, x - run0, 1, c);
+                            run0 = -1;
+                        }
+                        x++;
+                        continue;
+                    }
+                    int hw = clipW << 7, hh = clipH << 7, rr = clipRadius << 8;
+                    int mpx = (lx << 8) + 128 - hw;
+                    int mpy = (ly << 8) + 128 - hh;
+                    int mcov = aaHalfQ8 - sdRoundBoxQ8(mpx, mpy, hw, hh, rr);
+                    if (mcov <= 0) {
+                        if (run0 >= 0) {
+                            mAlpha = a0;
+                            fillRect(run0, y, x - run0, 1, c);
+                            run0 = -1;
+                        }
+                        x++;
+                        continue;
+                    }
+                    if (mcov > aaSpan) mcov = aaSpan;
+                    cov = (cov * mcov + aaSpan / 2) / aaSpan;
+                    if (cov <= 0) {
+                        if (run0 >= 0) {
+                            mAlpha = a0;
+                            fillRect(run0, y, x - run0, 1, c);
+                            run0 = -1;
+                        }
+                        x++;
+                        continue;
+                    }
+                }
+
+                if (cov >= aaSpan) {
+                    if (run0 < 0) run0 = x;
+                    x++;
+                    continue;
+                }
+                if (run0 >= 0) {
+                    mAlpha = a0;
+                    fillRect(run0, y, x - run0, 1, c);
+                    run0 = -1;
+                }
+                uint32_t a = ((uint32_t)a0 * (uint32_t)cov + (uint32_t)(aaSpan / 2)) / (uint32_t)aaSpan;
+                if (a > 255) a = 255;
+                mAlpha = (uint8_t)a;
+                if (mAlpha) fillRect(x, y, 1, 1, c);
+                x++;
+            }
+            if (run0 >= 0) {
+                mAlpha = a0;
+                fillRect(run0, y, xMax + 1 - run0, 1, c);
+            }
+        }
+        mAlpha = a0;
+    }
+
+    // Ring / annulus between rInner (exclusive hole) and rOuter (inclusive).
+    // Optional round-rect mask same as fillCircle.
+    __attribute__((noinline, section(".ramfunc")))
+    void fillCircleRing(int cx, int cy, int rOuter, int rInner, RGB565 c,
+                        int clipX = 0, int clipY = 0, int clipW = 0, int clipH = 0,
+                        int clipRadius = 0) {
+        if (!mTile || !mTile->buffer() || rOuter <= 0) return;
+        if (rInner < 0) rInner = 0;
+        if (rInner >= rOuter) return;
+
+        const int ro2 = rOuter * rOuter;
+        const int ri2 = rInner * rInner;
+        const bool mask = (clipW > 0 && clipH > 0);
+
+        auto isqrt = [](int remain, int hi) {
+            int lo = 0, dx = 0;
+            while (lo <= hi) {
+                int mid = (lo + hi) >> 1;
+                if (mid * mid <= remain) { dx = mid; lo = mid + 1; }
+                else hi = mid - 1;
+            }
+            return dx;
+        };
+
+        for (int dy = -rOuter; dy <= rOuter; dy++) {
+            int remainO = ro2 - dy * dy;
+            if (remainO < 0) continue;
+            int dxO = isqrt(remainO, rOuter);
+            int xL = cx - dxO;
+            int xR = cx + dxO + 1;
+
+            int dxI = 0;
+            bool hasHole = false;
+            if (dy >= -rInner && dy <= rInner) {
+                int remainI = ri2 - dy * dy;
+                if (remainI >= 0) {
+                    dxI = isqrt(remainI, rInner);
+                    hasHole = true;
+                }
+            }
+
+            int y = cy + dy;
+            auto emit = [&](int a0, int a1) {
+                if (a1 <= a0) return;
+                if (mask) {
+                    int ly = y - clipY;
+                    if (ly < 0 || ly >= clipH) return;
+                    int leftQ8 = 0, rightQ8 = 0;
+                    roundRectEdgesQ8(ly, clipW, clipH, clipRadius, leftQ8, rightQ8);
+                    fillHorzSpanAA(clipX, y, leftQ8, rightQ8, c,
+                                   (a0 - clipX) << 8, (a1 - clipX) << 8);
+                } else {
+                    fillRect(a0, y, a1 - a0, 1, c);
+                }
+            };
+
+            if (!hasHole) {
+                emit(xL, xR);
+            } else {
+                emit(xL, cx - dxI);
+                emit(cx + dxI + 1, xR);
+            }
+        }
+    }
+
+    // Soft-edged circle: concentric disks with falling alpha (cheap radial falloff).
+    __attribute__((noinline, section(".ramfunc")))
+    void fillCircleSoft(int cx, int cy, int radius, RGB565 c,
+                        int clipX = 0, int clipY = 0, int clipW = 0, int clipH = 0,
+                        int clipRadius = 0) {
+        if (!mTile || !mTile->buffer() || radius <= 0) return;
+        const uint8_t a0 = mAlpha;
+        static const uint8_t kScaleR[4] = { 100, 82, 58, 32 };
+        static const uint8_t kScaleA[4] = {  45, 90, 155, 255 };
+        for (int i = 0; i < 4; i++) {
+            int r = (radius * (int)kScaleR[i] + 50) / 100;
+            if (r <= 0) continue;
+            uint32_t a = ((uint32_t)a0 * kScaleA[i]) / 255;
+            if (a == 0) continue;
+            mAlpha = (uint8_t)a;
+            fillCircle(cx, cy, r, c, clipX, clipY, clipW, clipH, clipRadius);
+        }
+        mAlpha = a0;
+    }
+
+    // Anti-aliased rounded rectangle — SDF with ~2.5px soft edge (hides corner stairs).
+    __attribute__((noinline, section(".ramfunc")))
+    void fillRoundRect(int x, int y, int w, int h, int radius, RGB565 c) {
+        if (!mTile || !mTile->buffer() || w <= 0 || h <= 0) return;
+        if (radius <= 0) {
+            fillRect(x, y, w, h, c);
+            return;
+        }
+        int maxR = w < h ? (w / 2) : (h / 2);
+        if (radius > maxR) radius = maxR;
+
+        const uint8_t a0 = mAlpha;
+        const int aaHalfQ8 = softAaHalfQ8();
+        if (aaHalfQ8 <= 0) {
+            // Hard round rect (integer spans).
+            for (int row = 0; row < h; row++) {
+                int x0, x1;
+                roundRectSpanX(row, w, h, radius, x0, x1);
+                if (x1 > x0) fillRect(x + x0, y + row, x1 - x0, 1, c);
+            }
+            return;
+        }
+        const int aaSpan   = aaHalfQ8 * 2;
+        const int hwQ8 = w << 7;   // w/2 in Q8
+        const int hhQ8 = h << 7;
+        const int rQ8  = radius << 8;
+
+        for (int iy = 0; iy < h; iy++) {
+            const int pyQ8 = (iy << 8) + 128 - hhQ8;
+            int run0 = -1;
+            for (int ix = 0; ix < w; ) {
+                const int pxQ8 = (ix << 8) + 128 - hwQ8;
+                const int d = sdRoundBoxQ8(pxQ8, pyQ8, hwQ8, hhQ8, rQ8);
+                int cov = aaHalfQ8 - d; // d<0 inside → high cov
+                if (cov <= 0) {
+                    if (run0 >= 0) {
+                        mAlpha = a0;
+                        fillRect(x + run0, y + iy, ix - run0, 1, c);
+                        run0 = -1;
+                    }
+                    ix++;
+                    continue;
+                }
+                if (cov >= aaSpan) {
+                    if (run0 < 0) run0 = ix;
+                    ix++;
+                    continue;
+                }
+                if (run0 >= 0) {
+                    mAlpha = a0;
+                    fillRect(x + run0, y + iy, ix - run0, 1, c);
+                    run0 = -1;
+                }
+                uint32_t a = ((uint32_t)a0 * (uint32_t)cov + (uint32_t)(aaSpan / 2)) / (uint32_t)aaSpan;
+                if (a > 255) a = 255;
+                mAlpha = (uint8_t)a;
+                if (mAlpha) fillRect(x + ix, y + iy, 1, 1, c);
+                ix++;
+            }
+            if (run0 >= 0) {
+                mAlpha = a0;
+                fillRect(x + run0, y + iy, w - run0, 1, c);
+            }
+        }
+        mAlpha = a0;
+    }
+
+    // Anti-aliased rounded-rect stroke (SDF outer minus inner).
+    __attribute__((noinline, section(".ramfunc")))
+    void strokeRoundRect(int x, int y, int w, int h, int radius, int thickness, RGB565 c) {
+        if (!mTile || !mTile->buffer() || w <= 0 || h <= 0 || thickness <= 0) return;
+        if (thickness * 2 >= w || thickness * 2 >= h) {
+            fillRoundRect(x, y, w, h, radius, c);
+            return;
+        }
+        int maxR = w < h ? (w / 2) : (h / 2);
+        if (radius > maxR) radius = maxR;
+        int ir = radius - thickness;
+        if (ir < 0) ir = 0;
+        const int iw = w - thickness * 2;
+        const int ih = h - thickness * 2;
+
+        const uint8_t a0 = mAlpha;
+        const int aaHalfQ8 = softAaHalfQ8();
+        const int aaSpan   = aaHalfQ8 > 0 ? aaHalfQ8 * 2 : 1;
+        const int hwQ8  = w << 7;
+        const int hhQ8  = h << 7;
+        const int rQ8   = radius << 8;
+        const int ihwQ8 = iw << 7;
+        const int ihhQ8 = ih << 7;
+        const int irQ8  = ir << 8;
+
+        for (int iy = 0; iy < h; iy++) {
+            const int pyQ8 = (iy << 8) + 128 - hhQ8;
+            // Inner box is centered the same; map iy into inner local space.
+            const int iyInner = iy - thickness;
+            for (int ix = 0; ix < w; ix++) {
+                const int pxQ8 = (ix << 8) + 128 - hwQ8;
+                const int dOut = sdRoundBoxQ8(pxQ8, pyQ8, hwQ8, hhQ8, rQ8);
+                int covOut = aaHalfQ8 - dOut;
+                if (covOut <= 0) continue;
+                if (covOut > aaSpan) covOut = aaSpan;
+
+                int covIn = 0; // coverage of "inside inner shape" (to subtract)
+                if (iyInner >= 0 && iyInner < ih) {
+                    int ixInner = ix - thickness;
+                    if (ixInner >= 0 && ixInner < iw) {
+                        int ipx = (ixInner << 8) + 128 - ihwQ8;
+                        int ipy = (iyInner << 8) + 128 - ihhQ8;
+                        int dIn = sdRoundBoxQ8(ipx, ipy, ihwQ8, ihhQ8, irQ8);
+                        // Inside inner → positive "hole" coverage to remove.
+                        int cIn = aaHalfQ8 - dIn;
+                        if (cIn < 0) cIn = 0;
+                        if (cIn > aaSpan) cIn = aaSpan;
+                        covIn = cIn;
+                    }
+                }
+
+                // Stroke = in outer AND not in inner.
+                int cov = covOut - covIn;
+                if (cov <= 0) continue;
+                if (cov > aaSpan) cov = aaSpan;
+                uint32_t a = ((uint32_t)a0 * (uint32_t)cov + (uint32_t)(aaSpan / 2)) / (uint32_t)aaSpan;
+                if (a > 255) a = 255;
+                mAlpha = (uint8_t)a;
+                if (mAlpha) fillRect(x + ix, y + iy, 1, 1, c);
+            }
+        }
+        mAlpha = a0;
+    }
+
+    // Integer span [x0, x1) — kept for hit-tests / coarse use.
+    static void roundRectSpanX(int y, int w, int h, int radius, int& x0, int& x1) {
+        int lQ8 = 0, rQ8 = 0;
+        roundRectEdgesQ8(y, w, h, radius, lQ8, rQ8);
+        x0 = (lQ8 + 255) >> 8; // ceil
+        x1 = rQ8 >> 8;         // floor of exclusive end
+        if (x0 < 0) x0 = 0;
+        if (x1 > w) x1 = w;
+        if (x0 > x1) x0 = x1;
+    }
+
+    static bool pointInRoundRect(int px, int py, int w, int h, int radius) {
+        if (px < 0 || py < 0 || px >= w || py >= h) return false;
+        if (radius <= 0) return true;
+        int maxR = w < h ? (w / 2) : (h / 2);
+        if (radius > maxR) radius = maxR;
+        auto inCorner = [&](int cx, int cy) {
+            int dx = px - cx;
+            int dy = py - cy;
+            return dx * dx + dy * dy <= radius * radius;
+        };
+        if (px < radius && py < radius)           return inCorner(radius, radius);
+        if (px >= w - radius && py < radius)      return inCorner(w - 1 - radius, radius);
+        if (px < radius && py >= h - radius)      return inCorner(radius, h - 1 - radius);
+        if (px >= w - radius && py >= h - radius) return inCorner(w - 1 - radius, h - 1 - radius);
+        return true;
+    }
+
+private:
+    static uint32_t isqrt64(uint64_t n) {
+        uint64_t op = n, res = 0, one = 1ull << 62;
+        while (one > op) one >>= 2;
+        while (one != 0) {
+            if (op >= res + one) {
+                op -= res + one;
+                res = (res >> 1) + one;
+            } else {
+                res >>= 1;
+            }
+            one >>= 2;
+        }
+        return (uint32_t)res;
+    }
+
+    // Signed distance to rounded box; <0 inside. All args Q8.
+    static int sdRoundBoxQ8(int px, int py, int hw, int hh, int r) {
+        int ax = px < 0 ? -px : px;
+        int ay = py < 0 ? -py : py;
+        int qx = ax - hw + r;
+        int qy = ay - hh + r;
+        int ox = qx > 0 ? qx : 0;
+        int oy = qy > 0 ? qy : 0;
+        int outLen = (int)isqrt64((uint64_t)ox * (uint64_t)ox + (uint64_t)oy * (uint64_t)oy);
+        int m = qx > qy ? qx : qy;
+        int inn = m < 0 ? m : 0;
+        return outLen + inn - r;
+    }
+
+    // Subpixel left/right edges in Q8 for round rect row y (pixel-center sample).
+    static void roundRectEdgesQ8(int y, int w, int h, int radius, int& leftQ8, int& rightQ8) {
+        leftQ8  = 0;
+        rightQ8 = w << 8;
+        if (radius <= 0 || w <= 0 || h <= 0) return;
+        int maxR = w < h ? (w / 2) : (h / 2);
+        if (radius > maxR) radius = maxR;
+        if (y < 0 || y >= h) { leftQ8 = rightQ8 = 0; return; }
+
+        const int yCenterQ8 = (y << 8) + 128; // pixel center
+        const int cyTopQ8   = radius << 8;
+        const int cyBotQ8   = (h - 1 - radius) << 8;
+        int dyQ8 = 0;
+        if (yCenterQ8 < cyTopQ8)
+            dyQ8 = yCenterQ8 - cyTopQ8;
+        else if (yCenterQ8 > cyBotQ8)
+            dyQ8 = yCenterQ8 - cyBotQ8;
+        else
+            return;
+
+        // under = r^2 - dy^2 in Q16
+        int64_t under = ((int64_t)radius * radius) << 16;
+        under -= (int64_t)dyQ8 * (int64_t)dyQ8;
+        if (under <= 0) {
+            leftQ8  = radius << 8;
+            rightQ8 = (w - radius) << 8;
+            return;
+        }
+        int dxQ8 = (int)isqrt64((uint64_t)under);
+        leftQ8  = (radius << 8) - dxQ8;
+        rightQ8 = ((w - radius) << 8) + dxQ8;
+        if (leftQ8 < 0) leftQ8 = 0;
+        if (rightQ8 > (w << 8)) rightQ8 = w << 8;
+        if (leftQ8 > rightQ8) leftQ8 = rightQ8;
+    }
+
+    // Soft distance-based horizontal span AA (~2.5px filter).
+    void fillHorzSpanAA(int xOrigin, int y, int leftQ8, int rightQ8, RGB565 c,
+                        int clipL = 0, int clipR = -1) {
+        if (clipR >= 0) {
+            if (leftQ8 < clipL) leftQ8 = clipL;
+            if (rightQ8 > clipR) rightQ8 = clipR;
+        }
+        if (rightQ8 <= leftQ8) return;
+
+        const uint8_t a0 = mAlpha;
+        const int aaHalf = softAaHalfQ8();
+        if (aaHalf <= 0) {
+            int x0 = (leftQ8 + 255) >> 8;
+            int x1 = rightQ8 >> 8;
+            if (x1 > x0) fillRect(xOrigin + x0, y, x1 - x0, 1, c);
+            return;
+        }
+        const int aaSpan = aaHalf * 2;
+        // Expand iteration to cover soft fringe outside the hard span.
+        int first = (leftQ8 - aaHalf) >> 8;
+        int last  = (rightQ8 + aaHalf - 1) >> 8;
+        if (clipR >= 0) {
+            int c0 = clipL >> 8;
+            int c1 = (clipR - 1) >> 8;
+            if (first < c0) first = c0;
+            if (last > c1) last = c1;
+        }
+
+        int run0 = -1;
+        for (int x = first; x <= last; ) {
+            const int center = (x << 8) + 128;
+            int dL = center - leftQ8;
+            int dR = rightQ8 - center;
+            int d  = dL < dR ? dL : dR; // dist to nearest vertical edge (>0 inside)
+            int cov = d + aaHalf;
+            if (cov <= 0) {
+                if (run0 >= 0) {
+                    mAlpha = a0;
+                    fillRect(xOrigin + run0, y, x - run0, 1, c);
+                    run0 = -1;
+                }
+                x++;
+                continue;
+            }
+            if (cov >= aaSpan) {
+                if (run0 < 0) run0 = x;
+                x++;
+                continue;
+            }
+            if (run0 >= 0) {
+                mAlpha = a0;
+                fillRect(xOrigin + run0, y, x - run0, 1, c);
+                run0 = -1;
+            }
+            uint32_t a = ((uint32_t)a0 * (uint32_t)cov + (uint32_t)(aaSpan / 2)) / (uint32_t)aaSpan;
+            if (a > 255) a = 255;
+            mAlpha = (uint8_t)a;
+            if (mAlpha) fillRect(xOrigin + x, y, 1, 1, c);
+            x++;
+        }
+        if (run0 >= 0) {
+            mAlpha = a0;
+            fillRect(xOrigin + run0, y, last + 1 - run0, 1, c);
+        }
+        mAlpha = a0;
+    }
+
+public:
 
     // ── drawImage (straight copy, no rotation) ────────────────────
 
@@ -1109,6 +1620,211 @@ public:
         }
     }
 
+    // Rotate an A8 glyph about the baseline origin.
+    // baseX/baseY: 16.16 fixed-point (subpixel). Bitmap at baseline+(bearingX,-bearingY).
+    // angleDeci: 0.1°. Bilinear + 2×2 SS (nearest only at angle 0).
+    __attribute__((noinline, section(".ramfunc")))
+    void drawGlyphA8Rotated(const void* src, int srcW, int srcH,
+                            int32_t baseXQ16, int32_t baseYQ16,
+                            int bearingX, int bearingY,
+                            int angleDeci, RGB565 color) {
+        if (!mTile || !mTile->buffer() || !src || srcW <= 0 || srcH <= 0) return;
+
+        const int baseX = baseXQ16 >> 16;
+        const int baseY = baseYQ16 >> 16;
+        const int32_t fracX = baseXQ16 & 0xFFFF;
+        const int32_t fracY = baseYQ16 & 0xFFFF;
+
+        angleDeci = ((angleDeci % 3600) + 3600) % 3600;
+        if (angleDeci == 0 && fracX == 0 && fracY == 0) {
+            drawGlyphA8Blend(src, srcW, srcH,
+                             baseX + bearingX, baseY - bearingY, color);
+            return;
+        }
+        if (!resSinTable() && angleDeci % 900 != 0) return;
+
+        // Non-zero angle OR subpixel: use the rotated path (angle 0 + frac uses cos=1).
+        int32_t cosA, sinA;
+        if (angleDeci == 0) {
+            cosA = 65536; sinA = 0;
+        } else switch (angleDeci) {
+        case 900:  cosA = 0;      sinA = 65536;  break;
+        case 1800: cosA = -65536; sinA = 0;      break;
+        case 2700: cosA = 0;      sinA = -65536; break;
+        default:
+            cosA = (int32_t)cosDeci(angleDeci) << 1;
+            sinA = (int32_t)sinDeci(angleDeci) << 1;
+            break;
+        }
+
+        // Rotate about the baseline (baseX, baseY). Bitmap TL is at
+        // (bearingX, -bearingY) relative to baseline; rotCx/Cy are that TL→baseline
+        // vector in bitmap space (= baseline in bitmap coords).
+        const int rotCx = -bearingX;
+        const int rotCy = bearingY;
+
+        // AABB of rotated corners in baseline-relative screen space.
+        int corners[4][2] = {{0, 0}, {srcW, 0}, {srcW, srcH}, {0, srcH}};
+        int minX = 0x7FFFFFFF, maxX = -0x80000000;
+        int minY = 0x7FFFFFFF, maxY = -0x80000000;
+        for (int i = 0; i < 4; i++) {
+            int rx = ((int32_t)(corners[i][0] - rotCx) * cosA -
+                      (int32_t)(corners[i][1] - rotCy) * sinA) >> 16;
+            int ry = ((int32_t)(corners[i][0] - rotCx) * sinA +
+                      (int32_t)(corners[i][1] - rotCy) * cosA) >> 16;
+            if (rx < minX) minX = rx; if (ry < minY) minY = ry;
+            if (rx > maxX) maxX = rx; if (ry > maxY) maxY = ry;
+        }
+        minX -= 2; minY -= 2;
+        maxX += 2; maxY += 2;
+        const int outW = maxX - minX;
+        const int outH = maxY - minY;
+        if (outW <= 0 || outH <= 0) return;
+
+        // Inverse-map dest (baseline + (minX,minY)) → source. Sampling and
+        // origin must share the same pivot (baseline) — NOT the unrotated TL,
+        // or every glyph picks up an extra screen offset of (bearingX,-bearingY).
+        const int32_t stepSX_dx =  cosA;
+        const int32_t stepSY_dx = -sinA;
+        const int32_t stepSX_dy =  sinA;
+        const int32_t stepSY_dy =  cosA;
+        const int32_t halfX = (cosA + sinA) / 2 - 32768;
+        const int32_t halfY = (cosA - sinA) / 2 - 32768;
+        int32_t baseSX = (int32_t)rotCx * 65536
+                       + (int32_t)minX * cosA
+                       + (int32_t)minY * sinA
+                       + halfX;
+        int32_t baseSY = (int32_t)rotCy * 65536
+                       - (int32_t)minX * sinA
+                       + (int32_t)minY * cosA
+                       + halfY;
+
+        // Subpixel pivot: sample as if dest is shifted by -frac → src += -R^{-1}*frac.
+        // R^{-1} = [cos  sin; -sin  cos]
+        baseSX -= (int32_t)(((int64_t)fracX * cosA + (int64_t)fracY * sinA) >> 16);
+        baseSY -= (int32_t)((-(int64_t)fracX * sinA + (int64_t)fracY * cosA) >> 16);
+
+        // Unpack RLE → dense A8 once (glyphs are small); bilinear then is cheap.
+        constexpr int kScratchMax = 64 * 64;
+        uint8_t scratch[kScratchMax];
+        const uint8_t* plane = nullptr;
+        const int npx = srcW * srcH;
+        if (npx > 0 && npx <= kScratchMax) {
+            const uint8_t* rle = (const uint8_t*)src;
+            const uint32_t* off = (const uint32_t*)rle;
+            for (int row = 0; row < srcH; row++) {
+                uint8_t* dst = scratch + row * srcW;
+                uint32_t rowOff = off[row];
+                if (rowOff & 0x80000000) {
+                    const uint8_t* srow = rle + (rowOff & 0x7FFFFFFF);
+                    for (int col = 0; col < srcW; col++) dst[col] = srow[col];
+                } else {
+                    for (int col = 0; col < srcW; col++) dst[col] = 0;
+                    const uint8_t* p = rle + rowOff;
+                    int px = 0;
+                    int guard = 0;
+                    while (px < srcW) {
+                        if (++guard > srcW * 2) break;
+                        uint8_t gv = *p++;
+                        uint8_t len = *p++;
+                        int n = (int)len + 1;
+                        while (n-- > 0 && px < srcW) dst[px++] = gv;
+                    }
+                }
+            }
+            plane = scratch;
+        }
+
+        const uint8_t* rle = (const uint8_t*)src;
+        const uint32_t* off = (const uint32_t*)rle;
+        auto sampleA8 = [&](int sx, int sy) -> uint32_t {
+            if (sx < 0 || sy < 0 || sx >= srcW || sy >= srcH) return 0;
+            if (plane) return plane[sy * srcW + sx];
+            uint32_t rowOff = off[sy];
+            if (rowOff & 0x80000000)
+                return (rle + (rowOff & 0x7FFFFFFF))[sx];
+            const uint8_t* p = rle + rowOff;
+            int px = 0;
+            while (px <= sx) {
+                uint8_t gv = *p++;
+                uint8_t len = *p++;
+                int n = (int)len + 1;
+                if (px + n > sx) return gv;
+                px += n;
+            }
+            return 0;
+        };
+
+        uint16_t* tile = mTile->buffer();
+        const int tStride = mTile->stride();
+        const uint16_t srcColor = color.value;
+        const uint32_t viewA = mAlpha;
+        // Dest origin is baseline + AABB min (matches sampling pivot above).
+        const int originSX = baseX + mScreenX + minX;
+        const int originSY = baseY + mScreenY + minY;
+
+        // ±1/4 px in dst → src; 2×2 SS + bilinear softens rotated glyph edges.
+        const int32_t qx = stepSX_dx >> 2;
+        const int32_t qy = stepSY_dx >> 2;
+        const int32_t rx = stepSX_dy >> 2;
+        const int32_t ry = stepSY_dy >> 2;
+
+        auto sampleBilinear = [&](int32_t sxf, int32_t syf) -> uint32_t {
+            const int x0 = sxf >> 16;
+            const int y0 = syf >> 16;
+            const uint32_t fx = (uint32_t)(sxf >> 8) & 0xFFu;
+            const uint32_t fy = (uint32_t)(syf >> 8) & 0xFFu;
+            const uint32_t a00 = sampleA8(x0,     y0);
+            const uint32_t a10 = sampleA8(x0 + 1, y0);
+            const uint32_t a01 = sampleA8(x0,     y0 + 1);
+            const uint32_t a11 = sampleA8(x0 + 1, y0 + 1);
+            return (a00 * (255 - fx) * (255 - fy)
+                  + a10 * fx         * (255 - fy)
+                  + a01 * (255 - fx) * fy
+                  + a11 * fx         * fy) / (255u * 255u);
+        };
+
+        for (int y = 0; y < outH; y++) {
+            int sdsty = originSY + y;
+            if (sdsty < mClipT || sdsty >= mClipB) {
+                baseSX += stepSX_dy; baseSY += stepSY_dy;
+                continue;
+            }
+            int tdsty = sdsty - mTileOrgY;
+            if (tdsty < 0 || tdsty >= mTile->height()) {
+                baseSX += stepSX_dy; baseSY += stepSY_dy;
+                continue;
+            }
+            uint16_t* dstRow = tile + tdsty * tStride;
+            int32_t curSX = baseSX;
+            int32_t curSY = baseSY;
+
+            for (int x = 0; x < outW; x++) {
+                uint32_t g = (sampleBilinear(curSX - qx - rx, curSY - qy - ry)
+                            + sampleBilinear(curSX + qx - rx, curSY + qy - ry)
+                            + sampleBilinear(curSX - qx + rx, curSY - qy + ry)
+                            + sampleBilinear(curSX + qx + rx, curSY + qy + ry) + 2) >> 2;
+
+                if (g) {
+                    int sdstx = originSX + x;
+                    if (sdstx >= mClipL && sdstx < mClipR) {
+                        int tdstx = sdstx - mTileOrgX;
+                        if (tdstx >= 0 && tdstx < mTile->width()) {
+                            uint32_t a = g;
+                            if (viewA != 255) a = (a * viewA) / 255;
+                            if (a >= 255) dstRow[tdstx] = srcColor;
+                            else if (a) dstRow[tdstx] = blend565(srcColor, dstRow[tdstx], a);
+                        }
+                    }
+                }
+                curSX += stepSX_dx;
+                curSY += stepSY_dx;
+            }
+            baseSX += stepSX_dy;
+            baseSY += stepSY_dy;
+        }
+    }
+
     __attribute__((noinline, section(".ramfunc")))
     void drawText(const char* utf8, int x, int y, RGB565 color) {
         if (!utf8 || !mTile || !mTile->buffer()) return;
@@ -1501,6 +2217,8 @@ private:
     uint8_t mAlpha    = 255;
     uint8_t mTileIdx  = 0;
     uint32_t mScale   = kScaleOne;
+
+    static inline int sSoftAaHalfQ8 = 128; // default 0.5px
 };
 
 } // namespace litho
