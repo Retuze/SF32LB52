@@ -55,19 +55,34 @@ public:
                 sr = sx + tb.width;
                 sb = sy + tb.height;
             } else {
-                sx = p.screenX() + Painter::applyScale(tb.x, sc);
-                sy = p.screenY() + Painter::applyScale(tb.y, sc);
-                sr = p.screenX() + Painter::applyScale(tb.x + tb.width, sc);
-                sb = p.screenY() + Painter::applyScale(tb.y + tb.height, sc);
+                // Accumulate in 16.16 from parent origin — round only for clip.
+                int64_t cx = p.originXFP() + (int64_t)tb.x * (int64_t)sc;
+                int64_t cy = p.originYFP() + (int64_t)tb.y * (int64_t)sc;
+                int64_t cr = p.originXFP() + (int64_t)(tb.x + tb.width)  * (int64_t)sc;
+                int64_t cb = p.originYFP() + (int64_t)(tb.y + tb.height) * (int64_t)sc;
+                sx = Painter::roundFP(cx);
+                sy = Painter::roundFP(cy);
+                sr = Painter::roundFP(cr);
+                sb = Painter::roundFP(cb);
                 if (sr <= sx) sr = sx + 1;
                 if (sb <= sy) sb = sy + 1;
+
+                if (!p.intersectsClip(sx, sy, sr, sb)) continue;
+
+                uint8_t ca = child->alpha();
+                Painter cp = p;
+                cp.setScreenOriginFP(cx, cy);
+                cp.setScreenClip(sx, sy, sr, sb);
+                cp.setScale(sc);
+                cp.setAlpha((uint8_t)((uint32_t)pa * ca / 255));
+                child->onDraw(cp);
+                continue;
             }
 
             if (!p.intersectsClip(sx, sy, sr, sb)) continue;
 
             uint8_t ca = child->alpha();
-            if (ca == 255 && pa == 255 && tb.x == 0 && tb.y == 0 && sc == Painter::kScaleOne) {
-                // Child at (0,0), no alpha → reuse parent painter directly
+            if (ca == 255 && pa == 255 && tb.x == 0 && tb.y == 0) {
                 child->onDraw(p);
             } else {
                 Painter cp = p;

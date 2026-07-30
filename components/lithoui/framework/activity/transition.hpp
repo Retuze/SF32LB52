@@ -86,7 +86,7 @@ struct TransitionSpec {
         TransitionSpec s;
         s.enter.scale = true;
         s.exit.scale  = true;
-        return s;
+        return s; // default ease = ACCELERATE_DECELERATE (smoothstep)
     }
     // Push: new enters from edge, old exits toward the opposite edge
     static TransitionSpec pushFromRight() {

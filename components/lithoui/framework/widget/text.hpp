@@ -50,6 +50,7 @@ public:
     }
 
     void onDraw(Painter& p) override {
+        View::onDraw(p);
         if (mText[0] == '\0') return;
         if (!fontSection()) return;
         p.drawText(mText, 0, 0, mColor);

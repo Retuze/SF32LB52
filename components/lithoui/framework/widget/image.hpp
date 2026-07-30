@@ -120,6 +120,7 @@ public:
     // ---- draw ----
 
     void onDraw(Painter& p) override {
+        View::onDraw(p);
         if (mImageId < IMG_COUNT) {
             const ImageEntry* e    = imageEntry(mImageId);
             const void*       src  = (const void*)imagePixels(mImageId);

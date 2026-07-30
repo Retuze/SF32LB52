@@ -23,25 +23,17 @@ public:
         setBackgroundColor(color);
     }
 
-    // ---- background color ----
-
-    void setBackgroundColor(RGB565 color) {
-        mBgColor = color;
-        mHasBgColor = true;
-        uint8_t r = (color.value >> 11) & 0x1F;
-        uint8_t g = (color.value >> 5)  & 0x3F;
-        uint8_t b =  color.value        & 0x1F;
-        mPressedColor = RGB565::fromRGB(r * 128 / 31, g * 128 / 63, b * 128 / 31);
-        invalidate();
-    }
-    void clearBackgroundColor() { mHasBgColor = false; invalidate(); }
-    bool hasBackgroundColor() const { return mHasBgColor; }
-    RGB565 backgroundColor() const { return mBgColor; }
-
+    // Explicit pressed fill; if unset, pressed uses half-brightness of backgroundColor().
     void setPressedColor(RGB565 color) {
         mPressedColor = color;
+        mHasPressedColor = true;
         invalidate();
     }
+    void clearPressedColor() {
+        mHasPressedColor = false;
+        invalidate();
+    }
+    bool hasPressedColor() const { return mHasPressedColor; }
 
     // ---- background image ----
 
@@ -109,9 +101,12 @@ public:
         const int h = mBounds.height;
         if (w <= 0 || h <= 0) return;
 
-        // 1) Solid fill
-        if (mHasBgColor) {
-            p.fillRect(0, 0, w, h, mPressed ? mPressedColor : mBgColor);
+        // 1) Solid fill — View bg, or pressed shade while pressed.
+        if (hasBackgroundColor()) {
+            if (mPressed)
+                p.fillRect(0, 0, w, h, pressedFillColor());
+            else
+                View::onDraw(p);
         }
 
         // 2) Background image
@@ -126,8 +121,9 @@ public:
             p.drawImage(src, e->formatInfo, e->width, e->height, dx, dy, tint);
         }
 
-        // Pressed dim overlay when no dedicated pressed image (works for any bg).
-        if (mPressed && mPressedImage >= IMG_COUNT) {
+        // Pressed dim overlay for image buttons without a pressed image.
+        // Solid-color buttons already use pressedFillColor() — don't double-darken.
+        if (mPressed && mPressedImage >= IMG_COUNT && !hasBackgroundColor()) {
             uint8_t savedA = p.alpha();
             p.setAlpha(90);
             p.fillRect(0, 0, w, h, RGB565::Black());
@@ -192,14 +188,23 @@ public:
     }
 
 private:
-    // Background
-    RGB565  mBgColor      = {0};
-    RGB565  mPressedColor = {0};
-    bool    mHasBgColor   = false;
-    ImageId mBgImage      = IMG_COUNT;
-    ImageId mPressedImage = IMG_COUNT;
-    RGB565  mBgTint       = {0};
-    bool    mHasBgTint    = false;
+    static RGB565 halfBrightness(RGB565 c) {
+        uint8_t r = (c.value >> 11) & 0x1F;
+        uint8_t g = (c.value >> 5)  & 0x3F;
+        uint8_t b =  c.value        & 0x1F;
+        return RGB565::fromRGB(r * 128 / 31, g * 128 / 63, b * 128 / 31);
+    }
+
+    RGB565 pressedFillColor() const {
+        return mHasPressedColor ? mPressedColor : halfBrightness(backgroundColor());
+    }
+
+    RGB565  mPressedColor    = {0};
+    bool    mHasPressedColor = false;
+    ImageId mBgImage         = IMG_COUNT;
+    ImageId mPressedImage    = IMG_COUNT;
+    RGB565  mBgTint          = {0};
+    bool    mHasBgTint       = false;
 
     // Label
     char   mText[kMaxTextLen] = {0};

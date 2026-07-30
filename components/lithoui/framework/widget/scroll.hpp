@@ -112,20 +112,34 @@ public:
                 sb = sy + tb.height;
             } else {
                 int ly = tb.y + mScroll;
-                sx = p.screenX() + Painter::applyScale(tb.x, sc);
-                sy = p.screenY() + Painter::applyScale(ly, sc);
-                sr = p.screenX() + Painter::applyScale(tb.x + tb.width, sc);
-                sb = p.screenY() + Painter::applyScale(ly + tb.height, sc);
+                int64_t cx = p.originXFP() + (int64_t)tb.x * (int64_t)sc;
+                int64_t cy = p.originYFP() + (int64_t)ly * (int64_t)sc;
+                int64_t cr = p.originXFP() + (int64_t)(tb.x + tb.width) * (int64_t)sc;
+                int64_t cb = p.originYFP() + (int64_t)(ly + tb.height) * (int64_t)sc;
+                sx = Painter::roundFP(cx);
+                sy = Painter::roundFP(cy);
+                sr = Painter::roundFP(cr);
+                sb = Painter::roundFP(cb);
                 if (sr <= sx) sr = sx + 1;
                 if (sb <= sy) sb = sy + 1;
+
+                if (!p.intersectsClip(sx, sy, sr, sb)) continue;
+
+                uint8_t ca = child->alpha();
+                Painter cp = p;
+                cp.setScreenOriginFP(cx, cy);
+                cp.setScreenClip(sx, sy, sr, sb);
+                cp.setScale(sc);
+                cp.setAlpha((uint8_t)((uint32_t)pa * ca / 255));
+                child->onDraw(cp);
+                continue;
             }
 
             if (!p.intersectsClip(sx, sy, sr, sb)) continue;
 
             uint8_t ca = child->alpha();
             // Always apply origin when scrolled — (0,0) fast path would skip offset.
-            if (ca == 255 && pa == 255 && tb.x == 0 && tb.y == 0 && mScroll == 0
-                && sc == Painter::kScaleOne) {
+            if (ca == 255 && pa == 255 && tb.x == 0 && tb.y == 0 && mScroll == 0) {
                 child->onDraw(p);
             } else {
                 Painter cp = p;

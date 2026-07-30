@@ -50,7 +50,16 @@ public:
     bool       visible()   const { return bVisible; }
     void       setVisible(bool v) { bVisible = v; }
 
-    virtual void onDraw(Painter& p) { (void)p; }
+    // Solid fill drawn before subclass content (ViewGroup draws this, then children).
+    virtual void setBackgroundColor(RGB565 c) { mHasBg = true; mBgColor = c; invalidate(); }
+    virtual void clearBackgroundColor()       { mHasBg = false; invalidate(); }
+    bool   hasBackgroundColor() const   { return mHasBg; }
+    RGB565 backgroundColor()    const   { return mBgColor; }
+
+    virtual void onDraw(Painter& p) {
+        if (mHasBg && mBounds.width > 0 && mBounds.height > 0)
+            p.fillRect(0, 0, mBounds.width, mBounds.height, mBgColor);
+    }
 
     // Local-space bounds including all transforms (translation, scale).
     // Default: mBounds shifted by translation; scale expands about center.
@@ -98,6 +107,8 @@ protected:
 
     Region       mBounds;
     bool         bVisible       = true;
+    bool         mHasBg         = false;
+    RGB565       mBgColor       = {};
     int16_t      mTranslationX  = 0;
     int16_t      mTranslationY  = 0;
     uint8_t      mAlpha         = 255;

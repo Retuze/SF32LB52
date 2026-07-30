@@ -54,13 +54,16 @@ public:
             mRootView->onDraw(p);
             return;
         }
-        // Pivot at root center: origin' = translation + pivot*(1 - scale)
+        // Pivot at root center in 16.16: origin' = translation + pivot*(1 - scale)
         const int pivX = mRootView->width()  / 2;
         const int pivY = mRootView->height() / 2;
-        const int originX = p.screenX() + ox + pivX - View::applyScale(pivX, sc);
-        const int originY = p.screenY() + oy + pivY - View::applyScale(pivY, sc);
+        const int64_t sc64 = (int64_t)sc;
+        const int64_t originXFP =
+            ((int64_t)(p.screenX() + ox + pivX) << 16) - (int64_t)pivX * sc64;
+        const int64_t originYFP =
+            ((int64_t)(p.screenY() + oy + pivY) << 16) - (int64_t)pivY * sc64;
         Painter cp = p;
-        cp.setScreenOrigin(originX, originY);
+        cp.setScreenOriginFP(originXFP, originYFP);
         cp.setScale(sc);
         cp.setAlpha((uint8_t)((uint32_t)p.alpha() * a / 255));
         mRootView->onDraw(cp);

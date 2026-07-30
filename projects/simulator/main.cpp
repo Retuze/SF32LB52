@@ -25,11 +25,16 @@
 #include <cstdlib>
 #include <cstring>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 using namespace litho;
 
 static constexpr int kScreenW = 390;
 static constexpr int kScreenH = 450;
-static constexpr uint16_t kTransMs = 1500;
+static constexpr uint16_t kTransMs = 450;
+static constexpr uint16_t kScaleMs = 5000;
 
 // ── Transition catalog ───────────────────────────────────────────
 
@@ -50,6 +55,10 @@ static TransitionSpec makeTrans(int id) {
     case 12: return TransitionSpec::slideFromBottom().withFade().setDuration(kTransMs);
     case 13: return TransitionSpec::pushFromRight().withFade().setDuration(kTransMs);
     case 14: return TransitionSpec::pushFromBottom().withFade().setDuration(kTransMs);
+    case 15: return TransitionSpec::scale().setDuration(kScaleMs)
+                .setEase(Interpolator::LINEAR); // slow test: linear easier to inspect
+    case 16: return TransitionSpec::scale().withFade().setDuration(kScaleMs)
+                .setEase(Interpolator::LINEAR);
     default: return TransitionSpec::fade().setDuration(kTransMs);
     }
 }
@@ -70,20 +79,10 @@ static const char* const kTransLabels[] = {
     "SlideB + Fade",
     "PushR + Fade",
     "PushB + Fade",
+    "Scale 5s",
+    "Scale+Fade 5s",
 };
 static constexpr int kTransCount = (int)(sizeof(kTransLabels) / sizeof(kTransLabels[0]));
-
-class ColorBg : public View {
-public:
-    explicit ColorBg(RGB565 c) : mColor(c) {
-        mBounds = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
-    }
-    void onDraw(Painter& p) override {
-        p.fillRect(0, 0, mBounds.width, mBounds.height, mColor);
-    }
-private:
-    RGB565 mColor;
-};
 
 // Demo page opened by each transition — content differs so fade/slide is obvious.
 class TransDemoActivity : public Activity {
@@ -94,10 +93,9 @@ public:
 
         auto* root = new ViewGroup();
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
-        setContentView(root);
-
         // Alternate bg so crossfade is visible against the lab page.
-        root->addView(new ColorBg(RGB565::fromRGB(20, 90, 70)));
+        root->setBackgroundColor(RGB565::fromRGB(20, 90, 70));
+        setContentView(root);
 
         auto* title = new TextView(kTransLabels[mId]);
         title->setTextColor(RGB565::fromRGB(255, 230, 120));
@@ -141,9 +139,8 @@ public:
     void onCreate(Bundle&) override {
         auto* root = new ViewGroup();
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        root->setBackgroundColor(RGB565::fromRGB(35, 40, 55));
         setContentView(root);
-
-        root->addView(new ColorBg(RGB565::fromRGB(35, 40, 55)));
 
         auto* title = new TextView("Transitions");
         title->setTextColor(RGB565::White());
@@ -198,9 +195,8 @@ public:
     void onCreate(Bundle&) override {
         auto* root = new ViewGroup();
         root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        root->setBackgroundColor(RGB565::fromRGB(40, 40, 80));
         setContentView(root);
-
-        root->addView(new ColorBg(RGB565::fromRGB(40, 40, 80)));
 
         auto* title = new TextView("Hello 你好");
         title->setTextColor(RGB565::fromRGB(255, 220, 80));
@@ -256,6 +252,12 @@ public:
 
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // Source strings are UTF-8; default OEM/ACP console would mojibake CJK / punctuation.
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+
     printf("[sim] Watch Simulator — LithoUI Gallery\n");
 
     const char* dumpPath = nullptr;

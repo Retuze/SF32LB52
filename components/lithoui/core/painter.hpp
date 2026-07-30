@@ -128,9 +128,23 @@ public:
     uint16_t* tileBuf()    const { return mTile ? mTile->buffer() : nullptr; }
     int       tileStride() const { return mTile ? mTile->stride() : 0; }
 
-    void setScreenOrigin(int sx, int sy) { mScreenX = sx; mScreenY = sy; }
+    void setScreenOrigin(int sx, int sy) {
+        mScreenX = sx;
+        mScreenY = sy;
+        mOriginXFP = (int64_t)sx << 16;
+        mOriginYFP = (int64_t)sy << 16;
+    }
+    // 16.16 origin — accumulate child offsets without intermediate rounding.
+    void setScreenOriginFP(int64_t xFP, int64_t yFP) {
+        mOriginXFP = xFP;
+        mOriginYFP = yFP;
+        mScreenX = (int)((xFP + 32768) >> 16);
+        mScreenY = (int)((yFP + 32768) >> 16);
+    }
     int  screenX() const { return mScreenX; }
     int  screenY() const { return mScreenY; }
+    int64_t originXFP() const { return mOriginXFP; }
+    int64_t originYFP() const { return mOriginYFP; }
 
     // Fixed-point: 65536 = 1.0 (16.16, matches View::kScaleOne)
     static constexpr uint32_t kScaleOne = 65536u;
@@ -138,6 +152,9 @@ public:
     uint32_t scale() const { return mScale; }
     static inline int applyScale(int x, uint32_t s) {
         return (int)(((int64_t)x * (int64_t)s + 32768) >> 16);
+    }
+    static inline int roundFP(int64_t v) {
+        return (int)((v + 32768) >> 16);
     }
 
     void setAlpha(uint8_t a) { mAlpha = a; }
@@ -170,10 +187,11 @@ public:
             sx1 = sx0 + w;
             sy1 = sy0 + h;
         } else {
-            sx0 = mScreenX + applyScale(x, mScale);
-            sy0 = mScreenY + applyScale(y, mScale);
-            sx1 = mScreenX + applyScale(x + w, mScale);
-            sy1 = mScreenY + applyScale(y + h, mScale);
+            // From FP origin so siblings share unrounded parent position.
+            sx0 = roundFP(mOriginXFP + (int64_t)x * mScale);
+            sy0 = roundFP(mOriginYFP + (int64_t)y * mScale);
+            sx1 = roundFP(mOriginXFP + (int64_t)(x + w) * mScale);
+            sy1 = roundFP(mOriginYFP + (int64_t)(y + h) * mScale);
             if (sx1 <= sx0) sx1 = sx0 + 1;
             if (sy1 <= sy0) sy1 = sy0 + 1;
         }
@@ -998,82 +1016,19 @@ public:
         if (!mTile || !mTile->buffer() || srcW <= 0 || srcH <= 0 || !src) return;
 
         if (mScale != kScaleOne) {
-            // Bilinear stretch of glyph coverage into scaled destination.
-            int dstW = applyScale(srcW, mScale);
-            int dstH = applyScale(srcH, mScale);
+            // Same FP mapping as fillRect/drawImage: originFP + local * scale.
+            int64_t s = (int64_t)mScale;
+            int64_t leftFP  = mOriginXFP + (int64_t)dx * s;
+            int64_t topFP   = mOriginYFP + (int64_t)dy * s;
+            int64_t rightFP = leftFP + (int64_t)srcW * s;
+            int64_t botFP   = topFP + (int64_t)srcH * s;
+            int sx = roundFP(leftFP);
+            int sy = roundFP(topFP);
+            int dstW = roundFP(rightFP) - sx;
+            int dstH = roundFP(botFP) - sy;
             if (dstW < 1) dstW = 1;
             if (dstH < 1) dstH = 1;
-            int sx0 = mScreenX + applyScale(dx, mScale);
-            int sy0 = mScreenY + applyScale(dy, mScale);
-            int sx1 = sx0 + dstW;
-            int sy1 = sy0 + dstH;
-            if (sx0 < mClipL) sx0 = mClipL;
-            if (sy0 < mClipT) sy0 = mClipT;
-            if (sx1 > mClipR) sx1 = mClipR;
-            if (sy1 > mClipB) sy1 = mClipB;
-            if (sx0 >= sx1 || sy0 >= sy1) return;
-            int tx0 = sx0 - mTileOrgX, ty0 = sy0 - mTileOrgY;
-            int tx1 = sx1 - mTileOrgX, ty1 = sy1 - mTileOrgY;
-            if (tx0 < 0) tx0 = 0;
-            if (ty0 < 0) ty0 = 0;
-            if (tx1 > mTile->width())  tx1 = mTile->width();
-            if (ty1 > mTile->height()) ty1 = mTile->height();
-            if (tx0 >= tx1 || ty0 >= ty1) return;
-
-            const int baseSX = mScreenX + applyScale(dx, mScale);
-            const int baseSY = mScreenY + applyScale(dy, mScale);
-            const uint8_t* rle = (const uint8_t*)src;
-            const uint32_t* off = (const uint32_t*)rle;
-            uint16_t* tile = mTile->buffer();
-            int tStride = mTile->stride();
-            const uint16_t srcColor = color.value;
-            const uint32_t viewA = mAlpha;
-
-            auto sampleA8 = [&](int sx, int sy) -> uint32_t {
-                if (sx < 0 || sy < 0 || sx >= srcW || sy >= srcH) return 0;
-                uint32_t rowOff = off[sy];
-                if (rowOff & 0x80000000) {
-                    return (rle + (rowOff & 0x7FFFFFFF))[sx];
-                }
-                const uint8_t* p = rle + rowOff;
-                int px = 0;
-                while (px <= sx) {
-                    uint8_t g = *p++;
-                    uint8_t len = *p++;
-                    int n = (int)len + 1;
-                    if (px + n > sx) return g;
-                    px += n;
-                }
-                return 0;
-            };
-
-            for (int ty = ty0; ty < ty1; ty++) {
-                int localY = (ty + mTileOrgY) - baseSY;
-                if (localY < 0 || localY >= dstH) continue;
-                int y0, y1, fy;
-                scaleMapQ8(localY, dstH, srcH, y0, y1, fy);
-                uint16_t* dstRow = tile + ty * tStride;
-                for (int tx = tx0; tx < tx1; tx++) {
-                    int localX = (tx + mTileOrgX) - baseSX;
-                    if (localX < 0 || localX >= dstW) continue;
-                    int x0, x1, fx;
-                    scaleMapQ8(localX, dstW, srcW, x0, x1, fx);
-                    uint32_t a00 = sampleA8(x0, y0);
-                    uint32_t a10 = sampleA8(x1, y0);
-                    uint32_t a01 = sampleA8(x0, y1);
-                    uint32_t a11 = sampleA8(x1, y1);
-                    uint32_t w00 = (uint32_t)(255 - fx) * (uint32_t)(255 - fy);
-                    uint32_t w10 = (uint32_t)fx * (uint32_t)(255 - fy);
-                    uint32_t w01 = (uint32_t)(255 - fx) * (uint32_t)fy;
-                    uint32_t w11 = (uint32_t)fx * (uint32_t)fy;
-                    uint32_t a = (a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11) / (255u * 255u);
-                    if (!a) continue;
-                    if (viewA != 255) a = (a * viewA) / 255;
-                    if (!a) continue;
-                    if (a >= 255) dstRow[tx] = srcColor;
-                    else dstRow[tx] = blend565(srcColor, dstRow[tx], a);
-                }
-            }
+            blitGlyphA8Scaled(src, srcW, srcH, sx, sy, dstW, dstH, color);
             return;
         }
 
@@ -1167,6 +1122,7 @@ public:
         const int lineH = (int)fh->lineHeight;
         const int originX = x;
 
+        // Logical layout only; scale is applied inside drawGlyph via Painter FP origin.
         while (p < end) {
             if (*p == '\n') {
                 ++p;
@@ -1220,6 +1176,82 @@ public:
     }
 
 private:
+    // Bilinear blit of an A8 glyph into an already-scaled screen rectangle.
+    void blitGlyphA8Scaled(const void* src, int srcW, int srcH,
+                           int screenX, int screenY, int dstW, int dstH,
+                           RGB565 color) {
+        if (!mTile || !mTile->buffer() || !src || dstW <= 0 || dstH <= 0) return;
+
+        int sx0 = screenX, sy0 = screenY;
+        int sx1 = screenX + dstW, sy1 = screenY + dstH;
+        if (sx0 < mClipL) sx0 = mClipL;
+        if (sy0 < mClipT) sy0 = mClipT;
+        if (sx1 > mClipR) sx1 = mClipR;
+        if (sy1 > mClipB) sy1 = mClipB;
+        if (sx0 >= sx1 || sy0 >= sy1) return;
+
+        int tx0 = sx0 - mTileOrgX, ty0 = sy0 - mTileOrgY;
+        int tx1 = sx1 - mTileOrgX, ty1 = sy1 - mTileOrgY;
+        if (tx0 < 0) tx0 = 0;
+        if (ty0 < 0) ty0 = 0;
+        if (tx1 > mTile->width())  tx1 = mTile->width();
+        if (ty1 > mTile->height()) ty1 = mTile->height();
+        if (tx0 >= tx1 || ty0 >= ty1) return;
+
+        const uint8_t* rle = (const uint8_t*)src;
+        const uint32_t* off = (const uint32_t*)rle;
+        uint16_t* tile = mTile->buffer();
+        int tStride = mTile->stride();
+        const uint16_t srcColor = color.value;
+        const uint32_t viewA = mAlpha;
+
+        auto sampleA8 = [&](int sx, int sy) -> uint32_t {
+            if (sx < 0 || sy < 0 || sx >= srcW || sy >= srcH) return 0;
+            uint32_t rowOff = off[sy];
+            if (rowOff & 0x80000000) {
+                return (rle + (rowOff & 0x7FFFFFFF))[sx];
+            }
+            const uint8_t* p = rle + rowOff;
+            int px = 0;
+            while (px <= sx) {
+                uint8_t g = *p++;
+                uint8_t len = *p++;
+                int n = (int)len + 1;
+                if (px + n > sx) return g;
+                px += n;
+            }
+            return 0;
+        };
+
+        for (int ty = ty0; ty < ty1; ty++) {
+            int localY = (ty + mTileOrgY) - screenY;
+            if (localY < 0 || localY >= dstH) continue;
+            int y0, y1, fy;
+            scaleMapQ8(localY, dstH, srcH, y0, y1, fy);
+            uint16_t* dstRow = tile + ty * tStride;
+            for (int tx = tx0; tx < tx1; tx++) {
+                int localX = (tx + mTileOrgX) - screenX;
+                if (localX < 0 || localX >= dstW) continue;
+                int x0, x1, fx;
+                scaleMapQ8(localX, dstW, srcW, x0, x1, fx);
+                uint32_t a00 = sampleA8(x0, y0);
+                uint32_t a10 = sampleA8(x1, y0);
+                uint32_t a01 = sampleA8(x0, y1);
+                uint32_t a11 = sampleA8(x1, y1);
+                uint32_t w00 = (uint32_t)(255 - fx) * (uint32_t)(255 - fy);
+                uint32_t w10 = (uint32_t)fx * (uint32_t)(255 - fy);
+                uint32_t w01 = (uint32_t)(255 - fx) * (uint32_t)fy;
+                uint32_t w11 = (uint32_t)fx * (uint32_t)fy;
+                uint32_t a = (a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11) / (255u * 255u);
+                if (!a) continue;
+                if (viewA != 255) a = (a * viewA) / 255;
+                if (!a) continue;
+                if (a >= 255) dstRow[tx] = srcColor;
+                else dstRow[tx] = blend565(srcColor, dstRow[tx], a);
+            }
+        }
+    }
+
     void drawImageScaled(const void* src, int fmt,
                          int srcW, int srcH, int dx, int dy,
                          const RGB565* tint) {
@@ -1229,15 +1261,20 @@ private:
         int paletteSize = LITHO_PALETTE_SIZE(fmt);
         int palBytes = paletteSize * 2;
 
-        int dstW = applyScale(srcW, mScale);
-        int dstH = applyScale(srcH, mScale);
+        const int64_t s = (int64_t)mScale;
+        int64_t leftFP  = mOriginXFP + (int64_t)dx * s;
+        int64_t topFP   = mOriginYFP + (int64_t)dy * s;
+        int64_t rightFP = leftFP + (int64_t)srcW * s;
+        int64_t botFP   = topFP + (int64_t)srcH * s;
+        int baseSX = roundFP(leftFP);
+        int baseSY = roundFP(topFP);
+        int dstW = roundFP(rightFP) - baseSX;
+        int dstH = roundFP(botFP) - baseSY;
         if (dstW < 1) dstW = 1;
         if (dstH < 1) dstH = 1;
 
-        int sx0 = mScreenX + applyScale(dx, mScale);
-        int sy0 = mScreenY + applyScale(dy, mScale);
-        int sx1 = sx0 + dstW;
-        int sy1 = sy0 + dstH;
+        int sx0 = baseSX, sy0 = baseSY;
+        int sx1 = baseSX + dstW, sy1 = baseSY + dstH;
 
         if (sx0 < mClipL) sx0 = mClipL;
         if (sy0 < mClipT) sy0 = mClipT;
@@ -1255,8 +1292,6 @@ private:
         if (ty1 > mTile->height()) ty1 = mTile->height();
         if (tx0 >= tx1 || ty0 >= ty1) return;
 
-        const int baseSX = mScreenX + applyScale(dx, mScale);
-        const int baseSY = mScreenY + applyScale(dy, mScale);
         uint16_t* tile = mTile->buffer();
         int tStride = mTile->stride();
 
@@ -1457,6 +1492,8 @@ private:
     int     mTileOrgY = 0;
     int     mScreenX  = 0;
     int     mScreenY  = 0;
+    int64_t mOriginXFP = 0;
+    int64_t mOriginYFP = 0;
     int     mClipL    = -32768;
     int     mClipT    = -32768;
     int     mClipR    = 32767;
