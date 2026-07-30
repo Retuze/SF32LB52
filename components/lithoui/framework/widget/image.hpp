@@ -25,6 +25,7 @@ public:
             mHeight        = e->height;
             mBounds.width  = (int16_t)e->width;
             mBounds.height = (int16_t)e->height;
+            requestLayout();
         }
         invalidate();
     }
@@ -137,6 +138,21 @@ public:
         } else {
             p.fillRect(0, 0, mWidth, mHeight, RGB565::fromRGB(64, 160, 64));
         }
+    }
+
+protected:
+    void onMeasure(int32_t widthMeasureSpec, int32_t heightMeasureSpec) override {
+        int tw = mWidth;
+        int th = mHeight;
+        if (tw <= 0 && mBounds.width > 0)  tw = mBounds.width;
+        if (th <= 0 && mBounds.height > 0) th = mBounds.height;
+        if (layoutParams()) {
+            if (layoutParams()->width  >= 0) tw = layoutParams()->width;
+            if (layoutParams()->height >= 0) th = layoutParams()->height;
+        }
+        setMeasuredDimension(
+            MeasureSpec::resolveSize(tw, widthMeasureSpec),
+            MeasureSpec::resolveSize(th, heightMeasureSpec));
     }
 
 private:

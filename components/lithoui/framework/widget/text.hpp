@@ -32,6 +32,7 @@ public:
             int w = Painter::measureText(mText, &h);
             mBounds.width  = (int16_t)w;
             mBounds.height = (int16_t)h;
+            requestLayout();
         }
         invalidate();
     }
@@ -45,7 +46,7 @@ public:
     RGB565 textColor() const { return mColor; }
 
     // Intrinsic size from glyph advances / lineHeight.
-    void measure(int& outW, int& outH) const {
+    void intrinsicSize(int& outW, int& outH) const {
         outW = Painter::measureText(mText, &outH);
     }
 
@@ -54,6 +55,24 @@ public:
         if (mText[0] == '\0') return;
         if (!fontSection()) return;
         p.drawText(mText, 0, 0, mColor);
+    }
+
+protected:
+    void onMeasure(int32_t widthMeasureSpec, int32_t heightMeasureSpec) override {
+        int tw = 0, th = 0;
+        if (mExplicitSize) {
+            tw = mBounds.width;
+            th = mBounds.height;
+        } else {
+            tw = Painter::measureText(mText, &th);
+        }
+        if (layoutParams()) {
+            if (layoutParams()->width  >= 0) tw = layoutParams()->width;
+            if (layoutParams()->height >= 0) th = layoutParams()->height;
+        }
+        setMeasuredDimension(
+            MeasureSpec::resolveSize(tw, widthMeasureSpec),
+            MeasureSpec::resolveSize(th, heightMeasureSpec));
     }
 
 private:

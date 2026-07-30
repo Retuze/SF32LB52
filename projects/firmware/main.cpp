@@ -12,6 +12,8 @@ extern "C" {
 #include "core/litho_core.h"
 #include "framework/view/view.hpp"
 #include "framework/view/view_group.hpp"
+#include "framework/view/linear_layout.hpp"
+#include "framework/view/grid_layout.hpp"
 #include "framework/window/window.hpp"
 #include "framework/window/window_manager.hpp"
 #include "framework/activity/activity.hpp"
@@ -131,42 +133,49 @@ private:
 class TransLabActivity : public Activity {
 public:
     void onCreate(Bundle&) override {
-        auto* root = new ViewGroup();
-        root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        auto* root = new LinearLayout(LinearLayout::VERTICAL);
         root->setBackgroundColor(RGB565::fromRGB(35, 40, 55));
         setContentView(root);
 
+        auto* header = new LinearLayout(LinearLayout::HORIZONTAL);
         auto* title = new TextView("Transitions");
         title->setTextColor(RGB565::White());
-        title->bounds().x = 16;
-        title->bounds().y = 12;
-        root->addView(title);
+        header->addView(title, Lp(WC, WC)
+            .gravity(Gravity::CENTER_V)
+            .margins(16, 0, 4, 0));
+
+        auto* subtitle = new TextView("effects");
+        subtitle->setTextColor(RGB565::fromRGB(160, 170, 190));
+        header->addView(subtitle, Lp(WC, WC)
+            .gravity(Gravity::CENTER_V)
+            .margins(0, 0, 8, 0));
+
+        header->addView(new View(), Lp(0, 1, 1.f));
 
         auto* back = new Button(RGB565::fromRGB(80, 80, 100), 80, 36);
         back->setText("Back");
         back->setTextColor(RGB565::White());
-        back->bounds().x = (int16_t)(kScreenW - 96);
-        back->bounds().y = 8;
         back->setOnClick([](void* u) {
             ((TransLabActivity*)u)->finish(TransitionSpec::slideFromRight().setDuration(kTransMs));
         }, this);
-        root->addView(back);
+        header->addView(back, Lp(80, 36)
+            .gravity(Gravity::CENTER_V)
+            .margins(0, 0, 16, 0));
+        root->addView(header, MP, 56);
 
         auto* scroll = new ScrollView();
-        scroll->bounds() = {0, 56, (int16_t)kScreenW, (int16_t)(kScreenH - 56)};
-        root->addView(scroll);
+        auto* list = new LinearLayout(LinearLayout::VERTICAL);
+        list->setGap(8);
+        list->setPadding(16, 8, 16, 8);
 
         static const int kBtnH = 44;
-        static const int kGap  = 8;
         for (int i = 0; i < kTransCount; i++) {
             mClicks[i].self = this;
             mClicks[i].id   = i;
 
-            auto* btn = new Button(RGB565::fromRGB(55, 95, 160), kScreenW - 32, kBtnH);
+            auto* btn = new Button(RGB565::fromRGB(55, 95, 160), 0, kBtnH);
             btn->setText(kTransLabels[i]);
             btn->setTextColor(RGB565::White());
-            btn->bounds().x = 16;
-            btn->bounds().y = (int16_t)(8 + i * (kBtnH + kGap));
             btn->setOnClick([](void* u) {
                 auto* ctx = (ClickCtx*)u;
                 Intent intent;
@@ -175,8 +184,10 @@ public:
                 intent.putString("name", kTransLabels[ctx->id]);
                 ctx->self->startActivity(intent, makeTrans(ctx->id));
             }, &mClicks[i]);
-            scroll->addView(btn);
+            list->addView(btn, MP, kBtnH);
         }
+        scroll->addView(list, MP, WC);
+        root->addView(scroll, MP, 0, 1.f);
     }
 
 private:
@@ -187,39 +198,47 @@ private:
 class GalleryActivity : public Activity {
 public:
     void onCreate(Bundle&) override {
-        auto* root = new ViewGroup();
-        root->bounds() = {0, 0, (int16_t)kScreenW, (int16_t)kScreenH};
+        auto* root = new LinearLayout(LinearLayout::VERTICAL);
         root->setBackgroundColor(RGB565::fromRGB(40, 40, 80));
         setContentView(root);
 
+        auto* header = new LinearLayout(LinearLayout::HORIZONTAL);
         auto* title = new TextView("Hello 你好");
         title->setTextColor(RGB565::fromRGB(255, 220, 80));
-        title->bounds().x = 16;
-        title->bounds().y = 8;
-        root->addView(title);
+        header->addView(title, Lp(WC, WC)
+            .gravity(Gravity::CENTER_V)
+            .margins(16, 0, 4, 0));
+
+        auto* subtitle = new TextView("Gallery");
+        subtitle->setTextColor(RGB565::fromRGB(180, 180, 220));
+        header->addView(subtitle, Lp(WC, WC)
+            .gravity(Gravity::CENTER_V)
+            .margins(0, 0, 8, 0));
+
+        header->addView(new View(), Lp(0, 1, 1.f));
 
         auto* btn = new Button(RGB565::fromRGB(60, 120, 200), 120, 40);
         btn->setText("Trans");
         btn->setTextColor(RGB565::White());
-        btn->bounds().x = 250;
-        btn->bounds().y = 6;
         btn->setOnClick([](void* u) {
             auto* self = (GalleryActivity*)u;
             Intent intent;
             intent.target = "TransLab";
             self->startActivity(intent, TransitionSpec::slideFromRight().setDuration(kTransMs));
         }, this);
-        root->addView(btn);
+        header->addView(btn, Lp(120, 40)
+            .gravity(Gravity::CENTER_V)
+            .margins(0, 0, 16, 0));
+        root->addView(header, MP, 56);
 
-        static const int kScrollTop = 60;
+        static constexpr int kCols  = 3, kIconW = 100, kIconH = 100;
+        static constexpr int kGapX  = (kScreenW - kCols * kIconW) / (kCols + 1);
+        static constexpr int kGapY  = 15, kStartY = 10;
+
         auto* scroll = new ScrollView();
-        scroll->bounds() = {0, (int16_t)kScrollTop,
-                            (int16_t)kScreenW, (int16_t)(kScreenH - kScrollTop)};
-        root->addView(scroll);
-
-        static const int kCols = 3, kIconW = 100, kIconH = 100;
-        static const int kGapX = (kScreenW - kCols * kIconW) / (kCols + 1);
-        static const int kGapY = 15, kStartY = 10;
+        auto* grid = new GridLayout(kCols);
+        grid->setGap(kGapX, kGapY);
+        grid->setPadding(kGapX, kStartY, kGapX, kStartY);
 
         ImageId icons[] = {
             IMG_A_DIAL,     IMG_A_MESSAGES, IMG_A_MUSIC,
@@ -229,13 +248,11 @@ public:
         };
 
         for (int i = 0; i < (int)(sizeof(icons) / sizeof(icons[0])); i++) {
-            int cx = kGapX + (i % kCols) * (kIconW + kGapX);
-            int cy = kStartY + (i / kCols) * (kIconH + kGapY);
             auto* iv = new ImageView(icons[i]);
-            iv->bounds().x = (int16_t)cx;
-            iv->bounds().y = (int16_t)cy;
-            scroll->addView(iv);
+            grid->addView(iv, kIconW, kIconH);
         }
+        scroll->addView(grid, MP, WC);
+        root->addView(scroll, MP, 0, 1.f);
     }
 
     void onResume() override {

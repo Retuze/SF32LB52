@@ -77,6 +77,7 @@ public:
             ++n;
         }
         mText[n] = '\0';
+        requestLayout();
         invalidate();
     }
     const char* text() const { return mText; }
@@ -94,6 +95,33 @@ public:
         mUser = user;
     }
 
+protected:
+    void onMeasure(int32_t widthMeasureSpec, int32_t heightMeasureSpec) override {
+        int tw = mBounds.width;
+        int th = mBounds.height;
+        if (tw <= 0 || th <= 0) {
+            int textH = 0;
+            int textW = (mText[0] != '\0') ? Painter::measureText(mText, &textH) : 0;
+            if (mBgImage < IMG_COUNT) {
+                const ImageEntry* e = imageEntry(mBgImage);
+                if (tw <= 0) tw = (int)e->width;
+                if (th <= 0) th = (int)e->height;
+            }
+            if (tw <= 0) tw = textW + 24;
+            if (th <= 0) th = (textH > 0 ? textH : 16) + 16;
+            if (tw < 48) tw = 48;
+            if (th < 36) th = 36;
+        }
+        if (layoutParams()) {
+            if (layoutParams()->width  >= 0) tw = layoutParams()->width;
+            if (layoutParams()->height >= 0) th = layoutParams()->height;
+        }
+        setMeasuredDimension(
+            MeasureSpec::resolveSize(tw, widthMeasureSpec),
+            MeasureSpec::resolveSize(th, heightMeasureSpec));
+    }
+
+public:
     // ---- draw ----
 
     void onDraw(Painter& p) override {
@@ -101,12 +129,15 @@ public:
         const int h = mBounds.height;
         if (w <= 0 || h <= 0) return;
 
+        // Hold-still: reveal pressed after delay (needs another frame while armed).
+        updatePressedReveal();
+
         // 1) Solid fill — View bg, or pressed shade while pressed.
         if (hasBackgroundColor()) {
             if (mPressed)
                 p.fillRect(0, 0, w, h, pressedFillColor());
             else
-                View::onDraw(p);
+                drawBackground(p);
         }
 
         // 2) Background image
@@ -129,6 +160,8 @@ public:
             p.fillRect(0, 0, w, h, RGB565::Black());
             p.setAlpha(savedA);
         }
+
+        drawBorder(p);
 
         // 3) Centered label
         if (mText[0] != '\0' && fontSection()) {
@@ -156,8 +189,12 @@ public:
 
     bool onTouchEvent(TouchEvent& ev) override {
         if (ev.action == TouchAction::DOWN) {
-            if (!mPressed) { mPressed = true; invalidate(); }
-            mInside = true;
+            mArmed   = true;
+            mInside  = true;
+            mPressed = false;
+            mDownMs  = View::frameTimeMs();
+            // Kick a redraw so updatePressedReveal can run after the delay.
+            invalidate();
             return true;
         }
         if (ev.action == TouchAction::MOVE) {
@@ -167,18 +204,22 @@ public:
                            ly >= 0 && ly < mBounds.height);
             if (inside != mInside) {
                 mInside = inside;
-                mPressed = inside;
-                invalidate();
+                if (!inside && mPressed) {
+                    mPressed = false;
+                    invalidate();
+                } else if (inside) {
+                    invalidate();
+                }
             }
+            updatePressedReveal();
             return true;
         }
         if (ev.action == TouchAction::UP || ev.action == TouchAction::CANCEL) {
-            const bool fire = (ev.action == TouchAction::UP) && mInside && mPressed;
-            // Always clear pressed UI before the click side-effect (e.g. page
-            // transition), otherwise the pressed overlay sticks through the fade.
-            if (mPressed || mInside) {
+            const bool fire = (ev.action == TouchAction::UP) && mInside && mArmed;
+            if (mPressed || mInside || mArmed) {
                 mPressed = false;
                 mInside  = false;
+                mArmed   = false;
                 invalidate();
             }
             if (fire && mCallback) mCallback(mUser);
@@ -188,6 +229,20 @@ public:
     }
 
 private:
+    static constexpr uint16_t kPressedDelayMs = 100;
+
+    void updatePressedReveal() {
+        if (!mArmed || !mInside || mPressed) return;
+        uint32_t now = View::frameTimeMs();
+        if ((uint32_t)(now - mDownMs) < kPressedDelayMs) {
+            // Still waiting — keep frames coming while finger is down.
+            invalidate();
+            return;
+        }
+        mPressed = true;
+        invalidate();
+    }
+
     static RGB565 halfBrightness(RGB565 c) {
         uint8_t r = (c.value >> 11) & 0x1F;
         uint8_t g = (c.value >> 5)  & 0x3F;
@@ -210,11 +265,13 @@ private:
     char   mText[kMaxTextLen] = {0};
     RGB565 mTextColor = RGB565::fromRGB(255, 255, 255);
 
-    // Touch / click
-    bool   mPressed = false;
-    bool   mInside  = false;
-    int    mTouchSX = 0;
-    int    mTouchSY = 0;
+    // Touch / click — pressed UI is delayed so scroll gestures don't flash.
+    bool     mPressed = false;
+    bool     mArmed   = false;
+    bool     mInside  = false;
+    uint32_t mDownMs  = 0;
+    int      mTouchSX = 0;
+    int      mTouchSY = 0;
     void (*mCallback)(void*) = nullptr;
     void*  mUser = nullptr;
 };

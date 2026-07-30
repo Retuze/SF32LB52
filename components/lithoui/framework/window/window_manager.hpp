@@ -53,8 +53,15 @@ public:
         uint32_t touchN = 0;
 
         uint32_t frameTimeMs = mTick.tickMs();
+        View::setFrameTimeMs(frameTimeMs);
         mAnimMgr.tick(frameTimeMs);
         uint32_t cycInput = dwt_cycles();
+
+        // Layout before paint so requestLayout() from anim/touch lands this frame.
+        for (uint16_t wi = 0; wi < mCount; wi++) {
+            if (mWindows[wi]->visible())
+                mWindows[wi]->layoutIfNeeded(mDisplay.width(), mDisplay.height());
+        }
 
         // Snapshot DMA transfer cycles BEFORE drawRegion — the delta after
         // flush captures exactly the DMA time for THIS frame's tiles.

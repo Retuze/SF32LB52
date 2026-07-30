@@ -15,9 +15,20 @@ public:
         delete mRootView;
         mRootView = root;
         if (mDirtyList) mRootView->propagateDirtyList(mDirtyList);
+        if (mRootView) mRootView->requestLayout();
     }
 
     ViewGroup* rootView() const { return mRootView; }
+
+    // Run measure/layout when the tree requested it. Root is EXACTLY screen size.
+    void layoutIfNeeded(int screenW, int screenH) {
+        if (!mVisible || !mRootView) return;
+        if (!mRootView->isLayoutRequested()) return;
+        mRootView->measure(
+            MeasureSpec::make(screenW, MeasureSpec::EXACTLY),
+            MeasureSpec::make(screenH, MeasureSpec::EXACTLY));
+        mRootView->layout(0, 0, screenW, screenH);
+    }
 
     // Stopped activities keep their Window for the back stack, but must not
     // composite � otherwise a fade on page N reveals page N-2 underneath.

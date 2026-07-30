@@ -159,6 +159,59 @@ public:
         invalidate();
     }
 
+protected:
+    // Viewport fills parent specs; children measured with UNSPECIFIED height
+    // so content can extend beyond the viewport (vertical scroll).
+    void onMeasure(int32_t widthMeasureSpec, int32_t heightMeasureSpec) override {
+        const int w = MeasureSpec::getDefaultSize(getSuggestedMinimumWidth(), widthMeasureSpec);
+        const int h = MeasureSpec::getDefaultSize(getSuggestedMinimumHeight(), heightMeasureSpec);
+        setMeasuredDimension(w, h);
+
+        const int32_t childWSpec = getChildMeasureSpec(
+            widthMeasureSpec, insetHorizontal(), LayoutParams::MATCH_PARENT);
+        const int32_t childHSpec = MeasureSpec::make(0, MeasureSpec::UNSPECIFIED);
+
+        for (uint16_t i = 0; i < childCount(); i++) {
+            View* child = childAt(i);
+            if (!child || !child->visible()) continue;
+            litho::LayoutParams* lp = child->layoutParams();
+            // No LP → wrap / authored size (absolute grids). Explicit LP for Linear lists.
+            int widthDim  = lp ? lp->width
+                               : (child->width()  > 0 ? child->width()  : LayoutParams::WRAP_CONTENT);
+            int heightDim = lp ? lp->height
+                               : (child->height() > 0 ? child->height() : LayoutParams::WRAP_CONTENT);
+            int ml = lp ? lp->marginL : 0;
+            int mt = lp ? lp->marginT : 0;
+            int mr = lp ? lp->marginR : 0;
+            int mb = lp ? lp->marginB : 0;
+            child->measure(
+                getChildMeasureSpec(widthMeasureSpec,
+                    insetHorizontal() + ml + mr, widthDim),
+                (heightDim >= 0)
+                    ? MeasureSpec::make(heightDim, MeasureSpec::EXACTLY)
+                    : (heightDim == LayoutParams::MATCH_PARENT
+                           ? getChildMeasureSpec(heightMeasureSpec,
+                                 insetVertical() + mt + mb, heightDim)
+                           : childHSpec));
+            (void)childWSpec;
+        }
+    }
+
+    void onLayout(bool changed, int left, int top, int right, int bottom) override {
+        (void)changed; (void)right; (void)bottom;
+        (void)left; (void)top;
+        // LP children: top-left of content box (Linear/Grid). No LP: keep authored x/y.
+        for (uint16_t i = 0; i < childCount(); i++) {
+            View* child = childAt(i);
+            if (!child || !child->visible()) continue;
+            litho::LayoutParams* lp = child->layoutParams();
+            int cl = lp ? (insetLeft()  + lp->marginL) : child->x();
+            int ct = lp ? (insetTop()   + lp->marginT) : child->y();
+            child->layout(cl, ct, cl + child->measuredWidth(), ct + child->measuredHeight());
+        }
+        clampScroll();
+    }
+
 private:
     void cancelChild() {
         if (!mChild) return;

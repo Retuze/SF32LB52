@@ -20,6 +20,24 @@ public:
         child->mParent    = this;
         child->mDirtyList = mDirtyList;  // propagate from parent
         mChildren[mChildCount++] = child;
+        requestLayout();
+    }
+
+    // Takes ownership of lp.
+    void addView(View* child, LayoutParams* lp) {
+        child->setLayoutParams(lp);
+        addView(child);
+    }
+
+    // Fluent / sugar overloads (take ownership via Lp::release).
+    void addView(View* child, Lp&& lp) {
+        addView(child, lp.release());
+    }
+    void addView(View* child, int16_t w, int16_t h) {
+        addView(child, new LayoutParams(w, h));
+    }
+    void addView(View* child, int16_t w, int16_t h, float weight) {
+        addView(child, new LayoutParams(w, h, weight));
     }
 
     View* childAt(uint16_t i) const {
@@ -98,6 +116,19 @@ public:
     // ---- touch dispatch ----
 
     bool dispatchTouchEvent(TouchEvent& ev, int screenX, int screenY) override {
+        // After DOWN, deliver MOVE/UP/CANCEL to the same child (Android-style).
+        // Re-hit-testing CANCEL at (0,0) would miss Buttons under a LinearLayout.
+        if (ev.action != TouchAction::DOWN && mTouchChild) {
+            bool handled = mTouchChild->dispatchTouchEvent(
+                ev, mTouchChildSX, mTouchChildSY);
+            if (ev.action == TouchAction::UP || ev.action == TouchAction::CANCEL)
+                mTouchChild = nullptr;
+            return handled;
+        }
+
+        if (ev.action == TouchAction::DOWN)
+            mTouchChild = nullptr;
+
         // Hit-test children in reverse draw order (topmost first)
         for (int i = mChildCount - 1; i >= 0; i--) {
             View* child = mChildren[i];
@@ -111,6 +142,11 @@ public:
                 ev.y >= cy && ev.y < cy + tb.height) {
 
                 if (child->dispatchTouchEvent(ev, cx, cy)) {
+                    if (ev.action == TouchAction::DOWN) {
+                        mTouchChild   = child;
+                        mTouchChildSX = cx;
+                        mTouchChildSY = cy;
+                    }
                     if (!ev.handler) {
                         ev.handler   = child;
                         ev.handlerSX = cx;
@@ -139,6 +175,67 @@ public:
         }
     }
 
+protected:
+    // Absolute-compatible defaults: measure children, keep authored x/y on layout.
+    void onMeasure(int32_t widthMeasureSpec, int32_t heightMeasureSpec) override {
+        for (uint16_t i = 0; i < mChildCount; i++) {
+            View* child = mChildren[i];
+            if (!child || !child->visible()) continue;
+            measureChild(child, widthMeasureSpec, heightMeasureSpec);
+        }
+        setMeasuredDimension(
+            MeasureSpec::getDefaultSize(getSuggestedMinimumWidth(), widthMeasureSpec),
+            MeasureSpec::getDefaultSize(getSuggestedMinimumHeight(), heightMeasureSpec));
+    }
+
+    void onLayout(bool changed, int left, int top, int right, int bottom) override {
+        (void)changed; (void)left; (void)top; (void)right; (void)bottom;
+        for (uint16_t i = 0; i < mChildCount; i++) {
+            View* child = mChildren[i];
+            if (!child || !child->visible()) continue;
+            int cl = child->x();
+            int ct = child->y();
+            child->layout(cl, ct, cl + child->measuredWidth(), ct + child->measuredHeight());
+        }
+    }
+
+    void measureChild(View* child, int32_t parentWidthSpec, int32_t parentHeightSpec) {
+        LayoutParams* lp = child->layoutParams();
+        int width  = lp ? lp->width
+                        : (child->width()  > 0 ? child->width()  : LayoutParams::WRAP_CONTENT);
+        int height = lp ? lp->height
+                        : (child->height() > 0 ? child->height() : LayoutParams::WRAP_CONTENT);
+        int ml = lp ? lp->marginL : 0;
+        int mt = lp ? lp->marginT : 0;
+        int mr = lp ? lp->marginR : 0;
+        int mb = lp ? lp->marginB : 0;
+
+        child->measure(
+            getChildMeasureSpec(parentWidthSpec,
+                                insetHorizontal() + ml + mr, width),
+            getChildMeasureSpec(parentHeightSpec,
+                                insetVertical() + mt + mb, height));
+    }
+
+    // Horizontal: use parent width spec; height UNSPECIFIED (scroll content).
+    void measureChildWithMargins(View* child,
+                                 int32_t parentWidthSpec, int widthUsed,
+                                 int32_t parentHeightSpec, int heightUsed) {
+        LayoutParams* lp = child->layoutParams();
+        int width  = lp ? lp->width  : LayoutParams::WRAP_CONTENT;
+        int height = lp ? lp->height : LayoutParams::WRAP_CONTENT;
+        int ml = lp ? lp->marginL : 0;
+        int mt = lp ? lp->marginT : 0;
+        int mr = lp ? lp->marginR : 0;
+        int mb = lp ? lp->marginB : 0;
+
+        child->measure(
+            getChildMeasureSpec(parentWidthSpec,
+                insetHorizontal() + ml + mr + widthUsed, width),
+            getChildMeasureSpec(parentHeightSpec,
+                insetVertical() + mt + mb + heightUsed, height));
+    }
+
 private:
     void grow() {
         uint16_t newCap = (mCapacity == 0) ? 4 : mCapacity * 2;
@@ -152,6 +249,11 @@ private:
     View**   mChildren   = nullptr;
     uint16_t mChildCount = 0;
     uint16_t mCapacity   = 0;
+
+    // Captured child for the current pointer gesture.
+    View* mTouchChild   = nullptr;
+    int   mTouchChildSX = 0;
+    int   mTouchChildSY = 0;
 };
 
 } // namespace litho

@@ -4,6 +4,8 @@
 #include "core/dirty_list.hpp"
 #include "framework/base/object.hpp"
 #include "framework/event/event_types.hpp"
+#include "framework/view/measure_spec.hpp"
+#include "framework/view/layout_params.hpp"
 
 namespace litho {
 
@@ -22,6 +24,9 @@ public:
     int  y()      const { return mBounds.y; }
     int  width()  const { return mBounds.width; }
     int  height() const { return mBounds.height; }
+
+    int measuredWidth()  const { return mMeasuredWidth; }
+    int measuredHeight() const { return mMeasuredHeight; }
 
     // Animated visual properties
     int16_t  translationX() const { return mTranslationX; }
@@ -48,7 +53,7 @@ public:
 
     ViewGroup* parent()    const { return mParent; }
     bool       visible()   const { return bVisible; }
-    void       setVisible(bool v) { bVisible = v; }
+    void       setVisible(bool v);
 
     // Solid fill drawn before subclass content (ViewGroup draws this, then children).
     virtual void setBackgroundColor(RGB565 c) { mHasBg = true; mBgColor = c; invalidate(); }
@@ -56,9 +61,45 @@ public:
     bool   hasBackgroundColor() const   { return mHasBg; }
     RGB565 backgroundColor()    const   { return mBgColor; }
 
+    void setPadding(int16_t l, int16_t t, int16_t r, int16_t b);
+    int  paddingLeft()   const { return mPadL; }
+    int  paddingTop()    const { return mPadT; }
+    int  paddingRight()  const { return mPadR; }
+    int  paddingBottom() const { return mPadB; }
+
+    // CSS border-box: width/height include border + padding; margin stays outside.
+    void setBorder(int16_t width, RGB565 color);
+    void setBorder(int16_t l, int16_t t, int16_t r, int16_t b, RGB565 color);
+    void clearBorder();
+    int  borderLeft()   const { return mBorderL; }
+    int  borderTop()    const { return mBorderT; }
+    int  borderRight()  const { return mBorderR; }
+    int  borderBottom() const { return mBorderB; }
+    RGB565 borderColor() const { return mBorderColor; }
+
+    // Distance from bounds edge to content box (border + padding).
+    int insetLeft()   const { return (int)mBorderL + (int)mPadL; }
+    int insetTop()    const { return (int)mBorderT + (int)mPadT; }
+    int insetRight()  const { return (int)mBorderR + (int)mPadR; }
+    int insetBottom() const { return (int)mBorderB + (int)mPadB; }
+    int insetHorizontal() const { return insetLeft() + insetRight(); }
+    int insetVertical()   const { return insetTop() + insetBottom(); }
+
+    // Takes ownership of lp (may be null = absolute / no layout hints).
+    void setLayoutParams(LayoutParams* lp);
+    LayoutParams* layoutParams() const { return mLayoutParams; }
+
+    // ---- measure / layout ----
+
+    void requestLayout();
+    bool isLayoutRequested() const { return mLayoutRequested; }
+
+    void measure(int32_t widthMeasureSpec, int32_t heightMeasureSpec);
+    void layout(int l, int t, int r, int b);
+
     virtual void onDraw(Painter& p) {
-        if (mHasBg && mBounds.width > 0 && mBounds.height > 0)
-            p.fillRect(0, 0, mBounds.width, mBounds.height, mBgColor);
+        drawBackground(p);
+        drawBorder(p);
     }
 
     // Local-space bounds including all transforms (translation, scale).
@@ -102,23 +143,57 @@ public:
     // Touch event. Return true if handled.
     virtual bool onTouchEvent(TouchEvent& e) { (void)e; return false; }
 
+    // Updated each frame by WindowManager — for press-delay, animations, etc.
+    static void setFrameTimeMs(uint32_t ms) { sFrameTimeMs = ms; }
+    static uint32_t frameTimeMs() { return sFrameTimeMs; }
+
 protected:
     friend class ViewGroup;
+
+    virtual void onMeasure(int32_t widthMeasureSpec, int32_t heightMeasureSpec);
+    virtual void onLayout(bool changed, int left, int top, int right, int bottom) {
+        (void)changed; (void)left; (void)top; (void)right; (void)bottom;
+    }
+
+    void setMeasuredDimension(int measuredWidth, int measuredHeight) {
+        mMeasuredWidth  = measuredWidth;
+        mMeasuredHeight = measuredHeight;
+    }
+
+    virtual int getSuggestedMinimumWidth()  const { return 0; }
+    virtual int getSuggestedMinimumHeight() const { return 0; }
+
+    // Resolve child MeasureSpec from parent spec + LP dimension + parent insets.
+    static int32_t getChildMeasureSpec(int32_t spec, int padding, int childDimension);
+
+    void drawBackground(Painter& p) {
+        if (mHasBg && mBounds.width > 0 && mBounds.height > 0)
+            p.fillRect(0, 0, mBounds.width, mBounds.height, mBgColor);
+    }
+    void drawBorder(Painter& p);
 
     Region       mBounds;
     bool         bVisible       = true;
     bool         mHasBg         = false;
+    bool         mLayoutRequested = true; // first frame lays out
     RGB565       mBgColor       = {};
+    RGB565       mBorderColor   = {};
     int16_t      mTranslationX  = 0;
     int16_t      mTranslationY  = 0;
+    int16_t      mPadL = 0, mPadT = 0, mPadR = 0, mPadB = 0;
+    int16_t      mBorderL = 0, mBorderT = 0, mBorderR = 0, mBorderB = 0;
     uint8_t      mAlpha         = 255;
     uint32_t     mScale         = kScaleOne;
+    int          mMeasuredWidth  = 0;
+    int          mMeasuredHeight = 0;
     ViewGroup*   mParent        = nullptr;
     DirtyList*   mDirtyList     = nullptr;
+    LayoutParams* mLayoutParams = nullptr;
     uint16_t     mTileMask      = 0;  // 0=draw always, bit i=covered
 
 private:
     ViewPropertyAnimator* mAnimator = nullptr;
+    static uint32_t sFrameTimeMs;
 };
 
 // View property setters for ObjectAnimator
